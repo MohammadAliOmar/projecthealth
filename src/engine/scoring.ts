@@ -206,13 +206,38 @@ export function calculateScoringMetrics(
 /**
  * Computes the overall Health Score (0-100) using the weighted formula
  */
-export function computeHealthScore(metrics: ScoringMetrics): number {
+export function computeHealthScore(metrics: ScoringMetrics): number;
+export function computeHealthScore(
+  taskCompletion: number,
+  overdue: number,
+  activity: number,
+  equity: number,
+  communication: number
+): number;
+export function computeHealthScore(
+  metricsOrTaskCompletion: ScoringMetrics | number,
+  overdue?: number,
+  activity?: number,
+  equity?: number,
+  communication?: number
+): number {
+  if (typeof metricsOrTaskCompletion === 'object' && metricsOrTaskCompletion !== null) {
+    const score =
+      metricsOrTaskCompletion.taskCompletionScore * WEIGHTS.taskCompletion +
+      metricsOrTaskCompletion.overdueTaskScore * WEIGHTS.overdueTasks +
+      metricsOrTaskCompletion.memberActivityScore * WEIGHTS.memberActivity +
+      metricsOrTaskCompletion.workloadEquityScore * WEIGHTS.workloadEquity +
+      metricsOrTaskCompletion.communicationScore * WEIGHTS.communication;
+
+    return Math.max(0, Math.min(100, Math.round(score)));
+  }
+
   const score =
-    metrics.taskCompletionScore * WEIGHTS.taskCompletion +
-    metrics.overdueTaskScore * WEIGHTS.overdueTasks +
-    metrics.memberActivityScore * WEIGHTS.memberActivity +
-    metrics.workloadEquityScore * WEIGHTS.workloadEquity +
-    metrics.communicationScore * WEIGHTS.communication;
+    (metricsOrTaskCompletion ?? 0) * WEIGHTS.taskCompletion +
+    (overdue ?? 0) * WEIGHTS.overdueTasks +
+    (activity ?? 0) * WEIGHTS.memberActivity +
+    (equity ?? 0) * WEIGHTS.workloadEquity +
+    (communication ?? 0) * WEIGHTS.communication;
 
   return Math.max(0, Math.min(100, Math.round(score)));
 }

@@ -72,10 +72,6 @@ export interface FetchedAsanaData {
 
 /**
  * Extracts a numeric project GID from an Asana URL or raw ID string.
- * Examples:
- * - "1219253588419555" -> "1219253588419555"
- * - "https://app.asana.com/0/1219253588419555/list" -> "1219253588419555"
- * - "https://app.asana.com/0/1219253588419555/board" -> "1219253588419555"
  */
 export class AsanaApiError extends Error {
   status: number;
@@ -633,7 +629,10 @@ export function generateStudentProjectFromId(
     fallbackLeadName?: string;
   }
 ): FetchedAsanaData {
-  const cleanId = extractAsanaProjectId(projectIdOrUrl) || '1219253588419555';
+  const cleanId = extractAsanaProjectId(projectIdOrUrl);
+  if (!cleanId) {
+    throw new AsanaApiError(400, 'Could not find an Asana project ID in that input');
+  }
   
   // Hash the ID to produce deterministic variations
   let hash = 0;
@@ -706,11 +705,8 @@ export function generateStudentProjectFromId(
     },
   ];
 
-  // If the ID matches a known preset, pick it; otherwise select deterministically
-  let chosenPreset = teamPresets[hash % teamPresets.length];
-  if (cleanId === '1219253588419555') {
-    chosenPreset = teamPresets[0];
-  }
+  // Deterministically select preset based on hash
+  const chosenPreset = teamPresets[hash % teamPresets.length];
 
   const finalTeamName = options?.customTeamName?.trim() || chosenPreset.name;
   const finalProjectTitle = chosenPreset.title;

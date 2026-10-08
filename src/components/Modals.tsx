@@ -49,17 +49,16 @@ export const SendMessageModal: React.FC<SendMessageModalProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [launchEmailClient, setLaunchEmailClient] = useState(true);
   const [postToAsana, setPostToAsana] = useState(true);
-  const [asanaTokenInput, setAsanaTokenInput] = useState(() => {
-    return typeof window !== 'undefined'
-      ? localStorage.getItem('asana_personal_access_token') || ''
-      : '';
-  });
+  const [asanaTokenInput, setAsanaTokenInput] = useState('');
   const [showTokenField, setShowTokenField] = useState(false);
   const [copied, setCopied] = useState(false);
   const [sendResult, setSendResult] = useState<{
     success: boolean;
     asanaStatus: string;
+    asanaSuccess: boolean;
+    asanaSimulated: boolean;
     asanaTaskGid?: string;
+    firestoreSaved: boolean;
     emailsDispatched: string[];
     timestamp: string;
     mailClientLaunched: boolean;
@@ -119,32 +118,45 @@ export const SendMessageModal: React.FC<SendMessageModalProps> = ({
     setIsSending(true);
 
     try {
-      // Save updated token if user entered one
       const tokenToUse = asanaTokenInput.trim();
-      if (tokenToUse && typeof window !== 'undefined') {
-        localStorage.setItem('asana_personal_access_token', tokenToUse);
-      }
 
       const deliveryChannels: string[] = ['University Cloud Firestore'];
       let asanaFeedback = 'Notice logged and queued for Asana project';
       let asanaGid: string | undefined;
+      let asanaSuccess = false;
+      let asanaSimulated = false;
 
       // 1. Post notice task directly to Asana project board if enabled
       if (postToAsana) {
         try {
+          const memberUserGids = (group.members || [])
+            .map((m: any) => m.asanaGid || (/^\d+$/.test(m.id) ? m.id : undefined))
+            .filter(Boolean) as string[];
+
           const asanaRes = await postMessageToAsanaProject(
             group.id || group.repoUrl,
             tokenToUse,
             subject,
             message,
-            recipient === 'all' ? 'Entire Team' : recipient
+            recipient === 'all' ? 'Entire Team' : recipient,
+            memberUserGids
           );
           asanaFeedback = asanaRes.message;
           asanaGid = asanaRes.taskGid;
-          deliveryChannels.push('Asana Project Board Notice');
+          asanaSuccess = asanaRes.success;
+          asanaSimulated = Boolean(asanaRes.simulated);
+
+          if (asanaRes.success) {
+            deliveryChannels.push('Asana Project Board (Delivered)');
+          } else if (asanaRes.simulated) {
+            deliveryChannels.push('Asana Project Board (Simulated Record)');
+          } else {
+            deliveryChannels.push('Asana Project Board (Failed)');
+          }
         } catch (asanaErr: any) {
           console.warn('Asana post warning:', asanaErr);
           asanaFeedback = asanaErr.message || 'Queued for Asana sync';
+          deliveryChannels.push('Asana Project Board (Failed)');
         }
       }
 
@@ -164,7 +176,7 @@ export const SendMessageModal: React.FC<SendMessageModalProps> = ({
         }
       }
 
-      // 3. Build SentTeamMessage record
+      // 3. Build SentTeamMessage record (3a: save created task gid)
       const sentMsg: SentTeamMessage = {
         id: `msg-${Date.now()}`,
         senderName: currentUser?.name || 'Course Coordinator',
@@ -175,25 +187,28 @@ export const SendMessageModal: React.FC<SendMessageModalProps> = ({
         content: message.trim(),
         timestamp: new Date().toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }),
         channels: deliveryChannels,
+        taskGid: asanaGid,
       };
 
       // 4. Persist to Cloud Firestore under groups/{groupId}/messages
+      let firestoreSaved = false;
       if (currentUser?.id) {
         try {
           await saveMessageToFirestore(currentUser.id, group.id, sentMsg);
+          firestoreSaved = true;
         } catch (fsErr) {
           console.warn('Firestore message save notice:', fsErr);
         }
       }
 
-      // 5. Update group message history and communication health factor (+5)
+      // 3c: Remove any code that changes a team's communication score when lecturer sends message.
+      // Communication must come only from student activity. Keep saved record for audit.
       const updatedMessages = [sentMsg, ...(group.messages || [])];
       const updatedGroup: StudentGroup = {
         ...group,
         messages: updatedMessages,
-        lastActivity: 'Message Sent to Team',
+        lastActivity: 'Advisory Notice Dispatched',
         lastActivityTimestamp: new Date().toISOString(),
-        communicationScore: Math.min(100, (group.communicationScore || 70) + 5),
       };
 
       if (onMessageSentToGroup) {
@@ -203,13 +218,27 @@ export const SendMessageModal: React.FC<SendMessageModalProps> = ({
       setSendResult({
         success: true,
         asanaStatus: asanaFeedback,
+        asanaSuccess,
+        asanaSimulated,
         asanaTaskGid: asanaGid,
+        firestoreSaved,
         emailsDispatched: targetEmails,
         timestamp: sentMsg.timestamp,
         mailClientLaunched: mailLaunched,
       });
 
-      onSendSuccess(`Message successfully sent to ${recipient === 'all' ? group.name : recipient}!`);
+      // 3d: With no token, show exact toast "Recorded only. Nothing was posted to Asana."
+      if (postToAsana) {
+        if (!tokenToUse || asanaSimulated) {
+          onSendSuccess('Recorded only. Nothing was posted to Asana.');
+        } else if (asanaSuccess) {
+          onSendSuccess(asanaFeedback || `Advisory posted to Asana for ${recipient === 'all' ? group.name : recipient}`);
+        } else {
+          onSendSuccess(`Recorded in audit log. Asana delivery failed: ${asanaFeedback}`);
+        }
+      } else {
+        onSendSuccess(`Advisory recorded and logged for ${recipient === 'all' ? group.name : recipient}`);
+      }
     } catch (err: any) {
       console.error('Send error:', err);
     } finally {
@@ -291,21 +320,41 @@ export const SendMessageModal: React.FC<SendMessageModalProps> = ({
 
               {postToAsana && (
                 <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-1">
-                  <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                    <FolderGit2 className="w-3.5 h-3.5 text-rose-500" />
-                    Asana Project Notice:
+                  <div className="font-semibold text-slate-800 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <FolderGit2 className="w-3.5 h-3.5 text-rose-500" />
+                      Asana Project Notice:
+                    </span>
+                    {sendResult.asanaSuccess ? (
+                      <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100 px-1.5 py-0.5 rounded">
+                        Delivered (GID #{sendResult.asanaTaskGid})
+                      </span>
+                    ) : sendResult.asanaSimulated ? (
+                      <span className="text-[10px] text-amber-700 font-bold bg-amber-100 px-1.5 py-0.5 rounded">
+                        Simulated Record
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-rose-700 font-bold bg-rose-100 px-1.5 py-0.5 rounded">
+                        Delivery Failed
+                      </span>
+                    )}
                   </div>
                   <p className="text-slate-600 text-[11px]">{sendResult.asanaStatus}</p>
                 </div>
               )}
 
               <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-1">
-                <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                  <CheckSquare className="w-3.5 h-3.5 text-indigo-600" />
-                  Course Health &amp; Audit Log:
+                <div className="font-semibold text-slate-800 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <CheckSquare className="w-3.5 h-3.5 text-indigo-600" />
+                    Course Health &amp; Audit Log:
+                  </span>
+                  <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100 px-1.5 py-0.5 rounded">
+                    Recorded in Firestore
+                  </span>
                 </div>
                 <p className="text-slate-600 text-[11px]">
-                  Permanently saved to Cloud Firestore under advisory audit log. Communication health score increased by +5 points.
+                  Permanently saved to Cloud Firestore under advisory audit log. Team communication health factor is unaffected by lecturer advisory notices.
                 </p>
               </div>
             </div>
@@ -437,7 +486,7 @@ export const SendMessageModal: React.FC<SendMessageModalProps> = ({
                         className="w-full text-[11px] py-1.5 px-2 bg-white border border-slate-300 rounded font-mono"
                       />
                       <p className="text-[10px] text-slate-500">
-                        Token will be saved locally so messages can create real board tasks in Asana.
+                        Prototype only: this token is used from your browser. Use a throwaway token and revoke it afterwards.
                       </p>
                     </div>
                   )}
@@ -446,7 +495,7 @@ export const SendMessageModal: React.FC<SendMessageModalProps> = ({
 
               <div className="flex items-center gap-2 text-slate-600 text-[11px] pt-1">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                <span>Saves permanently to Cloud Firestore audit &amp; boosts communication score (+5 pts)</span>
+                <span>Saves permanently to Cloud Firestore advisory audit log</span>
               </div>
             </div>
 

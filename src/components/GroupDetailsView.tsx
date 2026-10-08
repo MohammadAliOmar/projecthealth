@@ -217,8 +217,9 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
       }
     } catch (e: any) {
       console.warn('Sync notice:', e);
+      // Item 6: A failed live fetch must keep the group's last real data unchanged and show the error to the lecturer
       if (onShowToast) {
-        onShowToast('Synced latest project state from Asana', 'info');
+        onShowToast(e.message || 'Unable to sync from Asana. Preserved last good data.', 'warning');
       }
     } finally {
       setIsSyncingAsana(false);
@@ -345,6 +346,19 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 mt-0.5">
               {group.name}: {group.projectTitle}
             </h1>
+            <div className="flex flex-wrap items-center gap-2 mt-1.5">
+              {group.dataSource === 'live' ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Synced from Asana {group.lastSyncedAt ? `(${new Date(group.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})` : ''}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                  Simulated data, not read from Asana
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -582,6 +596,13 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                       }`}
                       style={{ width: `${group.workloadEquityScore}%` }}
                     />
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 text-[10px] text-slate-500 mt-1.5">
+                    {group.members.map((m) => (
+                      <span key={m.id} className="bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200">
+                        {m.name}: <strong className="font-mono text-slate-700">{m.workloadSharePercent}%</strong>
+                      </span>
+                    ))}
                   </div>
                 </div>
 
@@ -1226,21 +1247,30 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                     </div>
                   </div>
 
-                  <span
-                    className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${
-                      member.status === 'Overloaded'
-                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                  <div className="flex flex-col items-end gap-1">
+                    <span
+                      className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${
+                        member.status === 'Left project'
+                          ? 'bg-slate-100 text-slate-500 border-slate-200'
+                          : member.status === 'Overloaded'
+                          ? 'bg-rose-50 text-rose-700 border-rose-200'
+                          : member.status === 'At-Risk / Disengaged'
+                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      }`}
+                    >
+                      {member.status === 'Left project'
+                        ? 'Left project'
+                        : member.status === 'Overloaded'
+                        ? 'Doing Too Much'
                         : member.status === 'At-Risk / Disengaged'
-                        ? 'bg-amber-50 text-amber-700 border-amber-200'
-                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    }`}
-                  >
-                    {member.status === 'Overloaded'
-                      ? 'Doing Too Much'
-                      : member.status === 'At-Risk / Disengaged'
-                      ? 'Not Active'
-                      : 'Balanced'}
-                  </span>
+                        ? 'Not Active'
+                        : 'Balanced'}
+                    </span>
+                    <span className="text-[11px] text-slate-600 font-medium">
+                      Workload Share: <strong className="font-mono text-indigo-600">{member.workloadSharePercent}%</strong>
+                    </span>
+                  </div>
                 </div>
 
                 {/* Member Metrics */}

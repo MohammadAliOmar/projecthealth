@@ -374,9 +374,20 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({
                 <div>
                   {/* Top card bar: Course & Risk badge & Delete action */}
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded font-mono">
-                      {group.courseCode}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded font-mono">
+                        {group.courseCode}
+                      </span>
+                      {group.dataSource === 'live' ? (
+                        <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                          Synced from Asana {group.lastSyncedAt ? `(${new Date(group.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})` : ''}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                          Simulated
+                        </span>
+                      )}
+                    </div>
                     <div className="flex items-center gap-1.5">
                       {getRiskBadge(group.calculatedRisk)}
                       <button

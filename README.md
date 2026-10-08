@@ -133,7 +133,7 @@ http://localhost:3000
 * **Sign Up**: Enter your Lecturer Name, Email, and Password (minimum 6 characters).
 * **Sign In**: Log in using your email and password.
 * **Security Protection**: If 5 incorrect passwords are typed consecutively, the system locks login for 15 minutes to prevent unauthorized access.
-* **Forgot Password**: Click "Forgot Password?" to request a 6-digit OTP verification code to reset your credentials.
+* **Forgot Password**: Click "Forgot Password?" and enter your email address to receive an official Firebase password reset link. The system always presents a consistent generic notification: *"If an account exists for that email, a reset link has been sent"*.
 
 ### 2. View the Lecturer Overview Dashboard
 * **Summary Cards**: Displays Total Projects, High Risk (<40), Medium Risk (40–69), Low Risk (70+), and Class Average Health Score.
@@ -141,17 +141,17 @@ http://localhost:3000
 
 ### 3. Add or Import a Student Asana Project
 1. Click the **"Add Project from Asana"** button at the top right of the dashboard.
-2. Enter the student team's **Asana Project ID** (e.g., `1219253588419555` or full Asana URL).
+2. Enter the student team's **Asana Project ID** (e.g., `1208934759238475` or full Asana URL).
 3. Enter the **Team Name** (e.g., `Social Media Campaign Platform`) and **Course Code** (e.g., `CAP-401`).
 4. **Choose your evaluation mode**:
-   * *With Asana Personal Access Token (PAT)*: Enter your token and click **"Fetch from Asana API"** to connect live.
-   * *Without Token*: Click **"Evaluate Student ID Directly"** to instantly generate and assess the student's project tasks.
-5. Review the preview metrics and click **"Confirm & Add Project to Dashboard"**.
+   * *With Asana Personal Access Token (PAT)*: Enter your throwaway token and click **"Live Asana REST API"** to connect live.
+   * *Without Token*: Click **"Pull Data from Student ID & Calculate Health"** to assess in simulated demo mode (clearly labeled with a "Simulated" badge).
+5. Review the preview metrics and click **"Add Project to Dashboard"**.
 
 ### 4. Deep-Dive into Project Health Details
 Click any project card to open the **Group Details View**:
 * **Factor Breakdown**: View exact points and weights for Task Completion ($30\%$), Overdue Tasks ($25\%$), Member Activity ($20\%$), Workload Equity ($15\%$), and Communication ($10\%$).
-* **Team Members & Workload Equity**: View each student's assigned tasks, commits, PR reviews, and calculated percentage share (normalized to $100\%$).
+* **Team Members & Workload Equity**: View each student's assigned tasks, commits, PR reviews, and real contribution percentage share (computed from completed work using the largest-remainder method, totaling exactly $100\%$).
 * **Diagnostic Risk Drivers**: Review plain-English explanations of why points were lost (e.g., *"3 Overdue Tasks Detected"* or *"Unequal Workload Distribution"*).
 
 ### 5. Send an Advisory Notice / Intervention
@@ -159,13 +159,13 @@ Click any project card to open the **Group Details View**:
 2. Select target recipient (**"Entire Team"** or a specific student).
 3. Enter the Subject and Message instructions.
 4. Click **"Send Message"**:
-   * Posts an advisory notice to the Asana board.
-   * Records a persistent entry in Cloud Firestore audit logs.
-   * Updates the team's Communication Factor score.
+   * Posts an advisory notice to the Asana board without a due date, prefixed `[ProjectHealth AI] Lecturer advisory:`, and notifies student followers if known.
+   * Records a persistent entry in Cloud Firestore audit logs (`groups/{id}/messages`).
+   * **Score Integrity Guarantee**: Dispatched advisories are excluded from all scoring inputs and never alter the team's Communication factor score (communication reflects student activity only).
    * Provides one-click shortcuts to compose in **Web Gmail** or your native email client (`mailto:`).
 
 ### 6. Synchronize Asana Updates
-When students complete tasks or add new teammates in Asana, click **"Sync with Asana"** in the top bar. The dashboard pulls the latest data and updates member counts and workload shares.
+When students complete tasks or add new teammates in Asana, click **"Sync from Asana"**. The dashboard pulls the latest live data. If a live fetch fails, the last good data is preserved and a clear error is shown. During live syncs, members no longer in Asana are marked "Left project" and excluded from active scoring.
 
 ---
 
@@ -176,7 +176,7 @@ When students complete tasks or add new teammates in Asana, click **"Sync with A
 | `port 3000 is already in use` | Another program or previous instance is running on port 3000. | Terminate the existing process or restart your terminal. |
 | `Cannot find module` or build error | Missing dependencies after unzipping. | Run `npm install` in the project root directory. |
 | Asana API fetch returns `401 Unauthorized` | Asana Personal Access Token is expired or invalid. | Generate a fresh PAT in Asana under *Developer App Console*, or use the direct evaluation mode. |
-| Reset email / OTP not arriving | University firewall or spam filter delay. | Check the spam folder or use the displayed on-screen verification code. |
+| Reset email not arriving | University firewall or spam filter delay. | Check the spam / junk folder for the Firebase reset email. |
 | Blank screen on browser launch | Browser cache holding outdated scripts. | Press `Ctrl + F5` (Windows) or `Cmd + Shift + R` (macOS) to hard-refresh the page. |
 
 ---
@@ -305,29 +305,40 @@ export function extractAsanaProjectId(input: string): string {
 ---
 
 #### Key Function: `syncStudentGroupFromAsana(group: StudentGroup, accessToken?: string): Promise<StudentGroup>`
-Synchronizes live project tasks and team members, performs member deduplication, and strictly normalizes workload distribution shares to $100\%$.
+Synchronizes live project tasks and team members, excludes lecturer advisory notices from all scoring inputs, marks departing collaborators as "Left project", and computes authentic workload distribution shares using largest-remainder rounding totaling exactly $100\%$.
 ```typescript
 export async function syncStudentGroupFromAsana(
   group: StudentGroup,
   accessToken?: string,
   fallbackLeadName?: string
 ): Promise<StudentGroup> {
-  const projectId = extractAsanaProjectId(group.id) || '1219253588419555';
+  const projectId = extractAsanaProjectId(group.id) || extractAsanaProjectId(group.repoUrl);
+  if (!projectId) {
+    throw new AsanaApiError(400, 'Could not find an Asana project ID in that input');
+  }
+
   let fetched: FetchedAsanaData;
+  let isLive = false;
 
   if (accessToken?.trim()) {
-    try {
-      const { project, tasks } = await fetchLiveAsanaProject(projectId, accessToken);
-      fetched = processRealAsanaData(project, tasks, {
-        customTeamName: group.name,
-        customCourseCode: group.courseCode,
-        fallbackLeadName: fallbackLeadName || group.teamLeader,
-      });
-    } catch {
-      fetched = generateStudentProjectFromId(projectId, { ... });
-    }
+    // Live fetch: throws error on failure (no silent fallback to simulated data)
+    const { project, tasks } = await fetchLiveAsanaProject(projectId, accessToken.trim());
+    isLive = true;
+    const advisoryGids = (group.messages || []).map((m) => m.taskGid).filter(Boolean) as string[];
+    fetched = processRealAsanaData(project, tasks, {
+      customTeamName: group.name,
+      customCourseCode: group.courseCode,
+      fallbackLeadName: fallbackLeadName || group.teamLeader,
+      advisoryTaskGids: advisoryGids,
+    });
   } else {
-    fetched = generateStudentProjectFromId(projectId, { ... });
+    // Explicit simulated mode when no token is supplied
+    fetched = generateStudentProjectFromId(projectId, {
+      customTeamName: group.name,
+      customCourseCode: group.courseCode,
+      fallbackLeadName: fallbackLeadName || group.teamLeader,
+    });
+    isLive = false;
   }
 
   // Deduplicate and combine members
@@ -504,31 +515,68 @@ npx tsx test_requirements.ts
 
 ### Validation Matrix & Test Results
 ```
-=== VERIFYING FUNCTIONAL & NON-FUNCTIONAL REQUIREMENTS ===
-[PASS] FR-1 (Auth & Multi-Tenant Isolation): Lecturer storage keys strictly isolated
-[PASS] FR-2 (Asana Ingestion & URL Parsing): Correctly parses numeric IDs, web URLs, and grp- prefixes
-[PASS] FR-3 (Multi-Factor Scoring): Health score formula accurately produces 65/100
-[PASS] FR-4 (Risk Classification): Risk levels correctly classify High (<40), Medium (40-69), Low (>=70)
-[PASS] FR-5 (Member Sync & Workload Equity): Team workload automatically normalizes to exactly 100%
-[PASS] FR-6 (Communication Audit): Message log structured and ready for advisory audit tracking
-[PASS] NFR-1 (Performance & Low Latency): 500 health calculations completed in 4.8ms (<0.2ms/calc)
-[PASS] NFR-2 (Resilience & Edge-Case Stability): Handles empty groups and zero-task states without errors
-[PASS] NFR-3 (Data Integrity): Data structures conform strictly to TypeScript interfaces
-========================================
-REQUIREMENTS VERIFICATION: 9/9 PASSED
-========================================
+========================================================================
+ProjectHealth AI — Complete Functional & Non-Functional Verification
+========================================================================
+
+=== PART 1: ORIGINAL REQUIREMENT CHECKS (FR-1 to NFR-3) ===
+[FR-1] Auth & Multi-Tenant Isolation: Owner lecturer granted access; foreign lecturer denied
+[FR-2] Asana Ingestion & URL Parsing: Raw IDs, grp- prefixes, and URLs parsed accurately
+[FR-3] Multi-Factor Scoring: computeHealthScore(25, 44, 61, 44.4, 0) returns 37; 65/100 verified
+[FR-4] Risk Classification: Boundary tiers (<40 High, 40-69 Medium, >=70 Low) verified
+[FR-5] Member Sync & Workload Equity: Shares total exactly 100% via largest-remainder rounding
+[FR-6] Communication Audit & Score Invariance: Lecturer messages audited without altering score
+[NFR-1] Performance & Low Latency: 500 calculations completed in ~1ms (<0.2ms/calc)
+[NFR-2] Resilience & Edge-Case Stability: Handles empty groups and zero-task states safely
+[NFR-3] Data Integrity: Strict TypeScript model and Firestore schema enforcement
+
+=== PART 2: THE FIVE NEW REQUIREMENT SUITES ===
+--- Suite 1: Asana URL and ID Parsing (Item 5) ---
+  ✓ New-format URL (asana.com/1/{workspaceId}/project/{projectId}/...) returns project ID
+  ✓ New-format URL with board tab returns project ID
+  ✓ Older-format URL (asana.com/0/{projectId}/...) returns project ID
+  ✓ Plain digits, grp- prefixes, and portfolio URLs return project ID
+  ✓ Empty/invalid inputs return empty string with descriptive error
+
+--- Suite 2: Real Workload Shares & Equity Calculation (Item 4) ---
+  ✓ Lopsided team shares sum to 100 while preserving raw contribution [80, 10, 10]
+  ✓ n=1 member receives exactly 100% share and equity factor of 100
+  ✓ Zero completed tasks falls back to assigned tasks; zero tasks splits equally with equity 50
+  ✓ Largest-remainder method resolves integer rounding ties
+
+--- Suite 3: Advisory Task Exclusions from Scoring (Item 3b) ---
+  ✓ Tasks prefixed "[ProjectHealth AI] Lecturer advisory:" excluded from metrics
+  ✓ Tasks matching advisory task GIDs excluded from completion and overdue counts
+  ✓ Tasks authored by lecturer excluded from student scoring metrics
+  ✓ Student workload shares calculated from authentic student contributions
+
+--- Suite 4: No Silent Fallback to Simulated Data (Item 6) ---
+  ✓ Failed live Asana fetches throw descriptive errors ("Asana token rejected", etc.)
+  ✓ Never silently swaps in simulated data when live sync fails
+  ✓ Existing group data preserved on failure
+
+--- Suite 5: Risk Classification Boundary Conditions (Item 8) ---
+  ✓ Boundary scores 0, 39, 40, 69, 70, 100 classified accurately
+
+========================================================================
+Results: 60 Passed, 0 Failed
+========================================================================
 ```
 
 ---
 
 ## 8. Engineering Challenges & Implemented Solutions
 
-| Challenge Encountered | Technical Root Cause | Engineered Solution |
+| Area / Feature | Requirement & Challenge | Implemented Architectural Solution |
 | :--- | :--- | :--- |
-| **Private Asana Workspaces** | Browsers cannot query private workspace tasks without personal authorization tokens. | Developed a **dual-mode ingestion engine**: accepts live PAT tokens for real-time synchronization, and features a deterministic simulation engine for instant student evaluation. |
-| **Workload Imbalance Drift** | When combining members from Asana with existing entries, raw percentages exceeded $100\%$. | Built a strict normalization pipeline that recalculates integer shares with remainder distribution, guaranteeing the total equals exactly $100\%$. |
-| **Silent Message Failure** | Traditional SMTP relies on external mail servers that can trigger spam filters or block client requests. | Implemented **multi-channel redundancy**: writes to Cloud Firestore audit trails, posts to Asana project task boards, and provides pre-filled native and Web Gmail launchers. |
-| **Subcollection Permission Errors** | Deeply nested Firestore subcollections (`messages`, `history`) were blocked when rules only matched top-level `/groups`. | Updated `firestore.rules` with subcollection wildcards enforcing consistent `lecturerId` security checks. |
+| **1. Firestore Security Rules** | Strict multi-tenant isolation; prevent unauthorized read/write access to student data. | Deployed owner-only rules enforcing `lecturerId == request.auth.uid` across `/users/{uid}`, `/groups/{groupId}` (including `/messages` and `/history` subcollections), and `/alerts/{alertId}`. |
+| **2. Password Recovery** | Insecure OTP codes and exposed static passcodes. | Removed all OTP screens, static codes, and on-screen code displays. Implemented standard email password reset via `sendPasswordResetEmail` with a generic confirmation message and maintained 15-minute lockout on 5 failed attempts. |
+| **3. Advisory Message Isolation** | Lecturer intervention messages artificially inflated team communication and overdue metrics. | Created Asana tasks without due dates with prefix `[ProjectHealth AI] Lecturer advisory:`, saved task GIDs on message audit records, and excluded all advisory/lecturer tasks from scoring while freezing communication score changes on sent messages. |
+| **4. Authentic Workload Distribution** | Artificial equal-split normalization hid student contribution discrepancies. | Replaced equal-split with raw contribution shares based on completed tasks (fallback to assigned), applying the largest-remainder rounding method to sum to 100%, and computing equity factor from the maximum share fraction. |
+| **5. Asana URL & ID Parsing** | Support modern workspace URLs and avoid fallback to static IDs. | Added regex matching for `app.asana.com/1/{workspaceId}/project/{projectId}/...` before legacy forms; removed all hardcoded project ID fallbacks, returning descriptive errors if no ID is found. |
+| **6. Truth in Telemetry & No Silent Fallbacks** | Failed Asana API calls silently reverted to simulated data. | Removed silent catch fallback. Failed fetches return structured error messages ("Asana token rejected", "Project not found", rate limit), keep existing group data intact, and display prominent "Simulated" / "Synced from Asana" badges. |
+| **7. Interim Token Security** | In-browser tokens risking accidental persistence or leak. | Configured Asana token field as password type with prototype warning notice. Maintained token strictly in ephemeral memory, never saving to Firestore, `localStorage`, logs, or URLs, and clearing on sign-out. |
+| **8. Automated Regression Suites** | Ensuring strict compliance across all scoring, parsing, and resilience requirements. | Built comprehensive test suite in `test_requirements.ts` validating all 9 core functional/non-functional requirements plus the 5 new verification suites (60/60 passing). |
 
 ---
 

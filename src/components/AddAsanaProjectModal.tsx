@@ -59,27 +59,12 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [fetchedData, setFetchedData] = useState<FetchedAsanaData | null>(null);
 
-  // Sync token to localStorage whenever changed
-  useEffect(() => {
-    if (asanaToken.trim()) {
-      localStorage.setItem('asana_personal_access_token', asanaToken.trim());
-    }
-  }, [asanaToken]);
-
-  // When opening modal, if empty, set a helpful placeholder or sample
-  useEffect(() => {
-    if (isOpen && !asanaUrlOrId) {
-      setAsanaUrlOrId('1219253588419555');
-      setTeamName('socies');
-    }
-  }, [isOpen]);
-
   if (!isOpen) return null;
 
   // Student Project Presets for Quick Testing & Demonstration
   const studentPresets = [
     {
-      id: '1219253588419555',
+      id: '1201938502948175',
       name: 'socies',
       title: 'Social Media Campaign Platform',
       course: 'CAP-401',
@@ -127,6 +112,12 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
       return;
     }
 
+    const projectId = extractAsanaProjectId(cleanInput);
+    if (!projectId) {
+      setFetchError('Could not find an Asana project ID in that input');
+      return;
+    }
+
     if (!asanaToken.trim()) {
       setFetchError(
         'Asana Personal Access Token is required to connect to Asana API. Alternatively, click "Evaluate Student ID Directly" below to assess without a PAT token.'
@@ -160,9 +151,19 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
   // Handler: Evaluate student ID directly without needing personal workspace PAT permissions
   const handleEvaluateStudentIdDirectly = () => {
     setFetchError(null);
-    setIsFetching(true);
+    const cleanInput = asanaUrlOrId.trim();
+    if (!cleanInput) {
+      setFetchError('Could not find an Asana project ID in that input');
+      return;
+    }
 
-    const cleanInput = asanaUrlOrId.trim() || '1219253588419555';
+    const projectId = extractAsanaProjectId(cleanInput);
+    if (!projectId) {
+      setFetchError('Could not find an Asana project ID in that input');
+      return;
+    }
+
+    setIsFetching(true);
 
     setTimeout(() => {
       try {
@@ -174,23 +175,31 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
 
         setFetchedData(processed);
       } catch (err: any) {
-        setFetchError('Failed to parse student project ID.');
+        setFetchError(err.message || 'Could not find an Asana project ID in that input');
       } finally {
         setIsFetching(false);
       }
-    }, 450);
+    }, 400);
   };
 
   // Final confirmation to add the project to dashboard
   const handleSaveToDashboard = () => {
     if (!fetchedData) return;
 
-    const group = buildStudentGroupFromAsana(
+    const isLive = Boolean(asanaToken.trim());
+    const baseGroup = buildStudentGroupFromAsana(
       fetchedData,
       teamName.trim(),
       courseCode.trim(),
       currentUserName
     );
+
+    const group: StudentGroup = {
+      ...baseGroup,
+      dataSource: isLive ? 'live' : 'simulated',
+      lastSyncedAt: isLive ? new Date().toISOString() : undefined,
+      lastActivity: isLive ? 'Just now (Synced from Asana)' : 'Just now (Simulated)',
+    };
 
     onAddProject(group);
 
@@ -282,7 +291,7 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
               required
               value={asanaUrlOrId}
               onChange={(e) => setAsanaUrlOrId(e.target.value)}
-              placeholder="e.g. 1219253588419555 or https://app.asana.com/0/1219253588419555/list"
+              placeholder="e.g. 1208934759238475 or https://app.asana.com/0/1208934759238475/list"
               className="w-full text-xs py-2 px-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:ring-2 focus:ring-indigo-500 font-mono"
             />
           </div>
@@ -350,6 +359,9 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
                 {showToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               </button>
             </div>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Prototype only: this token is used from your browser. Use a throwaway token and revoke it afterwards.
+            </p>
 
             {/* Quick 15-second Guide for Personal Access Token */}
             {showTokenHelp && (
@@ -364,7 +376,7 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
                   <li>Under <em>Personal Access Tokens</em>, click <strong>+ New access token</strong>, copy it, and paste it here.</li>
                 </ol>
                 <p className="text-[10px] text-slate-400 italic">
-                  Note: Your token is stored securely in your browser session and never sent to external servers.
+                  Note: Your token is held in-memory only and never written to Firestore, localStorage, logs, or URLs.
                 </p>
               </div>
             )}
@@ -385,7 +397,7 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
                   className="mt-1 text-[11px] font-semibold text-rose-900 underline hover:no-underline cursor-pointer inline-flex items-center gap-1"
                 >
                   <Sparkles className="w-3 h-3" />
-                  Evaluate Student ID Directly ({asanaUrlOrId || '1219253588419555'})
+                  Evaluate Student ID Directly {asanaUrlOrId ? `(${asanaUrlOrId})` : ''}
                 </button>
               </div>
             </div>
@@ -447,6 +459,13 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
                   <RefreshCw className="w-3 h-3" /> Re-calculate
                 </button>
               </div>
+
+              {!asanaToken.trim() && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Simulated data, not read from Asana</span>
+                </div>
+              )}
 
               {/* Score and Risk Badge Card */}
               <div className="flex items-center justify-between bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">

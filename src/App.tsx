@@ -200,6 +200,9 @@ export default function App() {
     showToast(`Signed in as ${user.name} (${user.email}) - Loaded ${userGroups.length} synced student projects`, 'success');
   };
 
+  // In-memory Asana PAT (never persisted to localStorage or Firestore)
+  const [inMemoryAsanaToken, setInMemoryAsanaToken] = useState<string>('');
+
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -208,8 +211,10 @@ export default function App() {
     }
     setAuthToken(null);
     setCurrentUser(null);
+    setInMemoryAsanaToken('');
     localStorage.removeItem('auth_jwt_token');
     localStorage.removeItem('auth_user_profile');
+    localStorage.removeItem('asana_personal_access_token');
     setSelectedGroupId(null);
     showToast('Signed out of Project Health AI', 'info');
   };
