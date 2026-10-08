@@ -1,0 +1,6 @@
+{
+  "name": "ProjectHealth AI - Capstone Project Early Warning Dashboard",
+  "description": "AI-based early warning dashboard helping university lecturers spot student group projects at risk before they fail.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

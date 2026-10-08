@@ -1,0 +1,188 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Lecturer profile and preference configuration",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["lecturer"] },
+        "courses": { "type": "array" },
+        "settings": { "type": "object" }
+      },
+      "required": ["name", "email", "role"]
+    },
+    "Group": {
+      "title": "Group",
+      "description": "Student capstone project group",
+      "type": "object",
+      "properties": {
+        "lecturerId": { "type": "string" },
+        "groupName": { "type": "string" },
+        "projectTitle": { "type": "string" },
+        "courseCode": { "type": "string" },
+        "status": { "type": "string", "enum": ["Active", "Reviewed", "Completed"] },
+        "memberCount": { "type": "number" },
+        "lastActivityAt": { "type": "string" },
+        "latestScore": { "type": "number" },
+        "latestRisk": { "type": "string", "enum": ["Low", "Medium", "High"] },
+        "previousScore": { "type": "number" },
+        "mediumStreak": { "type": "number" }
+      },
+      "required": ["lecturerId", "groupName", "projectTitle", "courseCode", "status"]
+    },
+    "GroupMember": {
+      "title": "GroupMember",
+      "description": "Student contributor in a group",
+      "type": "object",
+      "properties": {
+        "lecturerId": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "joinedAt": { "type": "string" }
+      },
+      "required": ["lecturerId", "name", "role"]
+    },
+    "GroupTask": {
+      "title": "GroupTask",
+      "description": "Work task assigned within a group",
+      "type": "object",
+      "properties": {
+        "lecturerId": { "type": "string" },
+        "title": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pending", "In Progress", "Completed", "Overdue"] },
+        "priority": { "type": "string", "enum": ["Low", "Medium", "High"] },
+        "dueDate": { "type": "string" },
+        "assigneeId": { "type": "string" },
+        "completedAt": { "type": "string" },
+        "completedById": { "type": "string" }
+      },
+      "required": ["lecturerId", "title", "status", "priority", "dueDate"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Commit or task activity logged for a group",
+      "type": "object",
+      "properties": {
+        "lecturerId": { "type": "string" },
+        "userId": { "type": "string" },
+        "actionType": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["lecturerId", "actionType", "timestamp"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Communication message in group channel",
+      "type": "object",
+      "properties": {
+        "lecturerId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "content": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["lecturerId", "content", "timestamp"]
+    },
+    "HealthSnapshot": {
+      "title": "HealthSnapshot",
+      "description": "Historical health calculation snapshot",
+      "type": "object",
+      "properties": {
+        "lecturerId": { "type": "string" },
+        "score": { "type": "number" },
+        "riskLevel": { "type": "string", "enum": ["Low", "Medium", "High"] },
+        "riskExplanation": { "type": "string" },
+        "topFactors": { "type": "array" },
+        "recommendation": { "type": "string" },
+        "snapshotTimestamp": { "type": "string" }
+      },
+      "required": ["lecturerId", "score", "riskLevel", "snapshotTimestamp"]
+    },
+    "HistoryItem": {
+      "title": "HistoryItem",
+      "description": "Intervention or note logged on a group",
+      "type": "object",
+      "properties": {
+        "lecturerId": { "type": "string" },
+        "type": { "type": "string", "enum": ["message_sent", "meeting_requested", "marked_reviewed"] },
+        "note": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["lecturerId", "type", "timestamp"]
+    },
+    "Alert": {
+      "title": "Alert",
+      "description": "System early risk alert notification",
+      "type": "object",
+      "properties": {
+        "lecturerId": { "type": "string" },
+        "groupId": { "type": "string" },
+        "groupName": { "type": "string" },
+        "projectName": { "type": "string" },
+        "riskLevel": { "type": "string", "enum": ["Low", "Medium", "High"] },
+        "healthScore": { "type": "number" },
+        "contributingFactors": { "type": "array" },
+        "recommendation": { "type": "string" },
+        "triggerType": { "type": "string" },
+        "status": { "type": "string", "enum": ["New", "Read", "Reviewed"] },
+        "deliveries": { "type": "array" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["lecturerId", "groupId", "riskLevel", "healthScore", "status", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "System audit trail record",
+      "type": "object",
+      "properties": {
+        "lecturerId": { "type": "string" },
+        "event": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["lecturerId", "event", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User lecturer profiles"
+    },
+    "/groups/{groupId}": {
+      "schema": { "$ref": "#/entities/Group" },
+      "description": "Capstone student groups"
+    },
+    "/groups/{groupId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/GroupMember" },
+      "description": "Members of a capstone group"
+    },
+    "/groups/{groupId}/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/GroupTask" },
+      "description": "Tasks for a capstone group"
+    },
+    "/groups/{groupId}/activityLogs/{id}": {
+      "schema": { "$ref": "#/entities/ActivityLog" },
+      "description": "Activity logs for a capstone group"
+    },
+    "/groups/{groupId}/messages/{id}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Messages for a capstone group"
+    },
+    "/groups/{groupId}/health/{id}": {
+      "schema": { "$ref": "#/entities/HealthSnapshot" },
+      "description": "Health assessment snapshots"
+    },
+    "/groups/{groupId}/history/{id}": {
+      "schema": { "$ref": "#/entities/HistoryItem" },
+      "description": "Intervention history items"
+    },
+    "/alerts/{alertId}": {
+      "schema": { "$ref": "#/entities/Alert" },
+      "description": "Early risk warning alerts"
+    },
+    "/auditLogs/{id}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Audit log events"
+    }
+  }
+}

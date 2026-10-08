@@ -1,0 +1,88 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isLecturerOwner() {
+      return isSignedIn() && resource.data.lecturerId == request.auth.uid;
+    }
+
+    function isCreatingWithLecturerId() {
+      return isSignedIn() && request.resource.data.lecturerId == request.auth.uid;
+    }
+
+    function keepsLecturerId() {
+      return !('lecturerId' in request.resource.data) || request.resource.data.lecturerId == resource.data.lecturerId;
+    }
+
+    // Users collection: signed-in user read/write only their own doc
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+
+    // Groups collection
+    match /groups/{groupId} {
+      allow read, delete: if isLecturerOwner();
+      allow create: if isCreatingWithLecturerId();
+      allow update: if isLecturerOwner() && keepsLecturerId();
+
+      // Subcollections under groups
+      match /members/{memberId} {
+        allow read, delete: if isLecturerOwner();
+        allow create: if isCreatingWithLecturerId();
+        allow update: if isLecturerOwner() && keepsLecturerId();
+      }
+
+      match /tasks/{taskId} {
+        allow read, delete: if isLecturerOwner();
+        allow create: if isCreatingWithLecturerId();
+        allow update: if isLecturerOwner() && keepsLecturerId();
+      }
+
+      match /activityLogs/{id} {
+        allow read, delete: if isLecturerOwner();
+        allow create: if isCreatingWithLecturerId();
+        allow update: if isLecturerOwner() && keepsLecturerId();
+      }
+
+      match /messages/{id} {
+        allow read, delete: if isLecturerOwner();
+        allow create: if isCreatingWithLecturerId();
+        allow update: if isLecturerOwner() && keepsLecturerId();
+      }
+
+      match /health/{id} {
+        allow read, delete: if isLecturerOwner();
+        allow create: if isCreatingWithLecturerId();
+        allow update: if isLecturerOwner() && keepsLecturerId();
+      }
+
+      match /history/{id} {
+        allow read, delete: if isLecturerOwner();
+        allow create: if isCreatingWithLecturerId();
+        allow update: if isLecturerOwner() && keepsLecturerId();
+      }
+    }
+
+    // Alerts collection
+    match /alerts/{alertId} {
+      allow read, delete: if isLecturerOwner();
+      allow create: if isCreatingWithLecturerId();
+      allow update: if isLecturerOwner() && keepsLecturerId();
+    }
+
+    // AuditLogs collection
+    match /auditLogs/{id} {
+      allow read, delete: if isLecturerOwner();
+      allow create: if isCreatingWithLecturerId();
+      allow update: if isLecturerOwner() && keepsLecturerId();
+    }
+  }
+}
