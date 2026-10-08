@@ -7,6 +7,27 @@
 
 import { StudentGroup, TeamMember, ProjectTask, RiskFactor, RiskLevel } from '../types';
 import { calculateHealthScore, getRiskClassification } from '../mockData';
+import { calculateOnTimeScore } from '../engine/scoring';
+
+export { calculateOnTimeScore };
+
+/**
+ * Formats a relative timestamp from a date or timestamp
+ */
+export function formatRelativeTime(dateInput?: string | Date | number | null): string {
+  if (!dateInput) return '3 hours ago';
+  const past = typeof dateInput === 'number' ? new Date(dateInput) : new Date(dateInput);
+  if (isNaN(past.getTime())) return '3 hours ago';
+  const diffMs = Date.now() - past.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) return 'Just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+}
 
 export interface AsanaTaskRaw {
   gid: string;
@@ -56,6 +77,7 @@ export interface FetchedAsanaData {
     totalTasks: number;
     completedTasks: number;
     overdueTasks: number;
+    sumDaysOverdue?: number;
     inProgressTasks: number;
     taskCompletionScore: number;
     overdueTaskScore: number;
@@ -536,15 +558,21 @@ export async function syncStudentGroupFromAsana(
     lecturerAsanaGid?: string;
   }
 ): Promise<StudentGroup> {
+  const cleanToken = accessToken?.trim();
+
+  // Item 5: Live data must NEVER be replaced by sample data if token is missing
+  if (group.dataSource === 'live' && !cleanToken) {
+    throw new AsanaApiError(401, 'Paste your Asana token to sync this project.');
+  }
+
   const projectId =
+    extractAsanaProjectId(group.asanaWorkspace || '') ||
     extractAsanaProjectId(group.id) ||
     extractAsanaProjectId(group.repoUrl);
 
   if (!projectId) {
     throw new AsanaApiError(400, 'Could not find an Asana project ID in that input');
   }
-
-  const cleanToken = accessToken?.trim();
 
   let fetched: FetchedAsanaData;
   let isLive = false;
@@ -568,8 +596,11 @@ export async function syncStudentGroupFromAsana(
       lecturerName: options?.lecturerName,
       lecturerAsanaGid: options?.lecturerAsanaGid,
     });
+  } else if (group.dataSource === 'live') {
+    // Item 5: Live data must NEVER be replaced by sample data if token is missing
+    throw new AsanaApiError(401, 'Paste your Asana token to sync this project.');
   } else {
-    // Demo mode (no token): explicitly simulated
+    // Demo mode (no token): explicitly simulated for demo/simulated groups only
     fetched = generateStudentProjectFromId(projectId, {
       customTeamName: group.name,
       customCourseCode: group.courseCode,
@@ -611,7 +642,7 @@ export async function syncStudentGroupFromAsana(
     messages: group.messages || [],
     dataSource: isLive ? 'live' : 'simulated',
     lastSyncedAt: isLive ? now.toISOString() : group.lastSyncedAt,
-    lastActivity: isLive ? 'Just now (Synced from Asana)' : 'Just now (Simulated)',
+    lastActivity: isLive ? 'Just now (Synced from Asana)' : formatRelativeTime(group.lastActivityTimestamp || new Date(Date.now() - 9 * 3600 * 1000).toISOString()),
     lastActivityTimestamp: now.toISOString(),
   };
 }
@@ -717,7 +748,7 @@ export function generateStudentProjectFromId(
   const rawMembers = chosenPreset.members.map((name, i) => ({
     gid: `m-${cleanId}-${i}`,
     name: i === 0 && options?.fallbackLeadName ? options.fallbackLeadName : name,
-    email: `${name.toLowerCase().replace(/\s+/g, '.')}@university.edu`,
+    email: `${name.toLowerCase().replace(/\s+/g, '.')}@example.com`,
   }));
 
   const rawTasks: AsanaTaskRaw[] = chosenPreset.taskNames.map((name, idx) => {
@@ -793,6 +824,7 @@ export function processRealAsanaData(
 
   let completedCount = 0;
   let overdueCount = 0;
+  let sumDaysOverdue = 0;
   let inProgressCount = 0;
 
   // Track members and workload
@@ -834,11 +866,15 @@ export function processRealAsanaData(
       if (t.due_on) {
         // Due date format YYYY-MM-DD
         const due = new Date(t.due_on);
-        due.setHours(23, 59, 59, 999);
-        if (due < now) {
+        // Calendar whole-day count past due date
+        const dueMidnight = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+        const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const diffDays = Math.round((nowMidnight.getTime() - dueMidnight.getTime()) / (1000 * 60 * 60 * 24));
+        if (diffDays > 0) {
           isOverdue = true;
           overdueCount++;
-          daysOverdue = Math.max(1, Math.floor((now.getTime() - due.getTime()) / (1000 * 60 * 60 * 24)));
+          daysOverdue = diffDays;
+          sumDaysOverdue += daysOverdue;
           if (daysOverdue > mostOverdueDays) {
             mostOverdueDays = daysOverdue;
             mostOverdueTaskName = t.name;
@@ -884,10 +920,8 @@ export function processRealAsanaData(
   const taskCompletionScore = Math.min(100, Math.round((completedCount / safeTotal) * 100));
 
   // 2. Overdue Task Score (25% weight, 0 - 100)
-  // Penalize ratio of overdue tasks plus severity of overdue days
-  let overduePenalty = (overdueCount / safeTotal) * 100;
-  if (mostOverdueDays > 7) overduePenalty += Math.min(25, (mostOverdueDays - 7) * 2);
-  const overdueTaskScore = Math.max(0, Math.min(100, Math.round(100 - overduePenalty * 1.2)));
+  // ONE shared formula: OnTime = max(0, 100 - 20*N - 2*SumDaysOverdue)
+  const overdueTaskScore = calculateOnTimeScore(overdueCount, sumDaysOverdue);
 
   // 3. Member Activity Score (20% weight)
   let daysSinceActivity = 1;
@@ -945,10 +979,10 @@ export function processRealAsanaData(
       id: `rf-overdue-${Date.now()}`,
       title: `${overdueCount} Overdue Tasks Detected (${pct}%)`,
       description: mostOverdueTaskName
-        ? `Task "${mostOverdueTaskName}" is overdue by ${mostOverdueDays} days in Asana. Overdue tasks severely reduce team health.`
-        : `${overdueCount} tasks are currently past their Asana due dates.`,
+        ? `Task "${mostOverdueTaskName}" is overdue by ${mostOverdueDays} days in Asana (${sumDaysOverdue} days late in total). Overdue tasks severely reduce team health.`
+        : `${overdueCount} tasks are currently past their Asana due dates (${sumDaysOverdue} days late in total).`,
       severity: overdueCount >= 3 || mostOverdueDays > 7 ? 'Critical' : 'Moderate',
-      scoreImpact: Math.round(-(overdueCount / safeTotal) * 25 * 10) / 10,
+      scoreImpact: Math.round(-(0.25 * (100 - overdueTaskScore)) * 10) / 10,
       suggestedAction: 'Hold an intervention sprint review to unblock overdue critical path milestones.',
     });
   }
@@ -1003,11 +1037,13 @@ export function processRealAsanaData(
     .filter(([name]) => name !== 'Unassigned')
     .map(([name, stats], idx) => {
       const share = workloadCalc.shares[idx] ?? Math.round((stats.assigned / safeTotal) * 100);
-      let status: 'Balanced' | 'Overloaded' | 'At-Risk / Disengaged' = 'Balanced';
-      if (stats.overdue >= 2 || (stats.assigned === 0 && safeTotal > 3)) {
-        status = 'At-Risk / Disengaged';
-      } else if (share > 50 && realMembers.length > 1) {
+      let status: 'Balanced' | 'Overloaded' | 'No completed work yet' = 'Balanced';
+      if (share > 50 && realMembers.length > 1) {
         status = 'Overloaded';
+      } else if (share === 0 && realMembers.some((m) => m.completed > 0)) {
+        status = 'No completed work yet';
+      } else {
+        status = 'Balanced';
       }
 
       return {
@@ -1018,7 +1054,6 @@ export function processRealAsanaData(
         avatarColor: avatarColors[idx % avatarColors.length],
         assignedTasks: stats.assigned,
         completedTasks: stats.completed,
-        commits: stats.completed * 3 + 2,
         prReviews: Math.max(1, Math.round(stats.completed / 2)),
         messagesSent: stats.assigned * 2 + 5,
         lastActive: daysSinceActivity === 0 ? 'Today' : `${daysSinceActivity}d ago`,
@@ -1032,7 +1067,7 @@ export function processRealAsanaData(
     membersList.push({
       id: `m-default-${Date.now()}`,
       name: options?.fallbackLeadName || 'Project Lead',
-      email: 'lead@university.edu',
+      email: 'lead@example.com',
       role: 'Team Lead',
       avatarColor: 'bg-indigo-600',
       assignedTasks: totalTasks,
@@ -1076,6 +1111,7 @@ export function processRealAsanaData(
       totalTasks,
       completedTasks: completedCount,
       overdueTasks: overdueCount,
+      sumDaysOverdue,
       inProgressTasks: inProgressCount,
       taskCompletionScore,
       overdueTaskScore,

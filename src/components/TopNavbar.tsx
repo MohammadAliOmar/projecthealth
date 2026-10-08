@@ -116,7 +116,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                 <span className="whitespace-nowrap">{isSyncing ? 'Syncing...' : 'Sync with Asana'}</span>
               </button>
               <span className="text-[10px] text-slate-400 mt-0.5 hidden md:block">
-                Last synced: {lastSynced}
+                {lastSynced === 'Not synced yet' ? 'Not synced yet' : `Last synced: ${lastSynced}`}
               </span>
             </div>
 

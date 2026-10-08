@@ -1,10 +1,11 @@
 import { StudentGroup, SystemAlert, UserSettings, RiskLevel } from './types';
+export { calculateOnTimeScore } from './engine/scoring';
 
 /**
  * Calculates the overall project health score (0 to 100) using 5 weighted factors:
  * 1. Task Completion (30%) - Percentage of tasks marked as completed in Asana
  * 2. On-Time Delivery (25%) - Measures task timeliness, lower score if tasks are overdue
- * 3. Member Activity (20%) - Code updates, commits, and task participation
+ * 3. Member Activity (20%) - Recent task activity in Asana
  * 4. Fair Work Share (15%) - How evenly work is divided across team members
  * 5. Team Communication (10%) - Message exchange and collaboration in workspace
  */
@@ -14,16 +15,43 @@ export function calculateHealthScore(scores: {
   memberActivityScore: number;
   workloadEquityScore: number;
   communicationScore: number;
-}): number {
-  // Step 1: Multiply each factor by its assigned weight percentage
+}): number;
+export function calculateHealthScore(
+  taskCompletion: number,
+  overdue: number,
+  activity: number,
+  workload: number,
+  communication: number
+): number;
+export function calculateHealthScore(
+  arg1: {
+    taskCompletionScore: number;
+    overdueTaskScore: number;
+    memberActivityScore: number;
+    workloadEquityScore: number;
+    communicationScore: number;
+  } | number,
+  overdue?: number,
+  activity?: number,
+  workload?: number,
+  communication?: number
+): number {
+  if (typeof arg1 === 'number') {
+    const weightedSum =
+      arg1 * 0.30 +
+      (overdue ?? 0) * 0.25 +
+      (activity ?? 0) * 0.20 +
+      (workload ?? 0) * 0.15 +
+      (communication ?? 0) * 0.10;
+    const clampedScore = Math.max(0, Math.min(100, weightedSum));
+    return Math.round(clampedScore * 10) / 10;
+  }
   const weightedSum =
-    scores.taskCompletionScore * 0.30 +
-    scores.overdueTaskScore * 0.25 +
-    scores.memberActivityScore * 0.20 +
-    scores.workloadEquityScore * 0.15 +
-    scores.communicationScore * 0.10;
-
-  // Step 2: Keep the score clamped between 0 and 100, rounded to 1 decimal place
+    arg1.taskCompletionScore * 0.30 +
+    arg1.overdueTaskScore * 0.25 +
+    arg1.memberActivityScore * 0.20 +
+    arg1.workloadEquityScore * 0.15 +
+    arg1.communicationScore * 0.10;
   const clampedScore = Math.max(0, Math.min(100, weightedSum));
   return Math.round(clampedScore * 10) / 10;
 }
@@ -61,12 +89,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'm1',
         name: 'Alex Rivera',
-        email: 'a.rivera@university.edu',
+        email: 'a.rivera@example.com',
         role: 'Full Stack & Tech Lead',
         avatarColor: 'bg-indigo-600',
         assignedTasks: 16,
         completedTasks: 13,
-        commits: 54,
         prReviews: 12,
         messagesSent: 48,
         lastActive: '4 hours ago',
@@ -76,27 +103,25 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'm2',
         name: 'Jordan Lee',
-        email: 'j.lee@university.edu',
+        email: 'j.lee@example.com',
         role: 'Algorithms & Waypoints',
         avatarColor: 'bg-rose-500',
         assignedTasks: 5,
         completedTasks: 1,
-        commits: 2,
         prReviews: 0,
         messagesSent: 4,
         lastActive: '8 days ago',
         workloadSharePercent: 8,
-        status: 'At-Risk / Disengaged',
+        status: 'Balanced',
       },
       {
         id: 'm3',
         name: 'Priya Patel',
-        email: 'p.patel@university.edu',
+        email: 'p.patel@example.com',
         role: 'Frontend UI & Telemetry',
         avatarColor: 'bg-amber-500',
         assignedTasks: 7,
         completedTasks: 3,
-        commits: 11,
         prReviews: 3,
         messagesSent: 16,
         lastActive: '2 days ago',
@@ -106,12 +131,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'm4',
         name: 'Marcus Zhang',
-        email: 'm.zhang@university.edu',
+        email: 'm.zhang@example.com',
         role: 'Hardware Simulation & QA',
         avatarColor: 'bg-emerald-600',
         assignedTasks: 6,
         completedTasks: 2,
-        commits: 8,
         prReviews: 2,
         messagesSent: 9,
         lastActive: '3 days ago',
@@ -183,7 +207,7 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'rf-2',
         title: 'Severe Workload Polarization',
-        description: 'Alex Rivera accounts for 68% of workload and 54 commits, while Jordan Lee has 2 commits and is stalled.',
+        description: 'Alex Rivera accounts for 68% of workload, while Jordan Lee is stalled with no completed tasks.',
         severity: 'Critical',
         scoreImpact: -12.0,
         suggestedAction: 'Reassign collision protocol to Marcus and conduct 1-on-1 check-in with Jordan.',
@@ -245,47 +269,44 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'hm1',
         name: 'Chloe Martinez',
-        email: 'c.martinez@university.edu',
+        email: 'c.martinez@example.com',
         role: 'Systems Architect',
         avatarColor: 'bg-purple-600',
         assignedTasks: 8,
         completedTasks: 3,
-        commits: 14,
         prReviews: 2,
         messagesSent: 12,
         lastActive: '9 days ago',
         workloadSharePercent: 42,
-        status: 'At-Risk / Disengaged',
+        status: 'Balanced',
       },
       {
         id: 'hm2',
         name: 'David Kim',
-        email: 'd.kim@university.edu',
+        email: 'd.kim@example.com',
         role: 'Embedded BLE Engineer',
         avatarColor: 'bg-blue-600',
         assignedTasks: 7,
         completedTasks: 2,
-        commits: 9,
         prReviews: 1,
         messagesSent: 8,
         lastActive: '10 days ago',
         workloadSharePercent: 30,
-        status: 'At-Risk / Disengaged',
+        status: 'Balanced',
       },
       {
         id: 'hm3',
         name: 'Fatima Al-Mansoor',
-        email: 'f.almansoor@university.edu',
+        email: 'f.almansoor@example.com',
         role: 'HL7 / FHIR Integration',
         avatarColor: 'bg-rose-600',
         assignedTasks: 6,
         completedTasks: 1,
-        commits: 5,
         prReviews: 0,
         messagesSent: 5,
         lastActive: '11 days ago',
         workloadSharePercent: 28,
-        status: 'At-Risk / Disengaged',
+        status: 'Balanced',
       },
     ],
     tasks: [
@@ -333,8 +354,8 @@ export const INITIAL_GROUPS: StudentGroup[] = [
     riskFactors: [
       {
         id: 'hrf-1',
-        title: 'Prolonged Repository & Workspace Inactivity',
-        description: 'Zero code commits and zero task check-ins across all team members for 9 consecutive days.',
+        title: 'Prolonged Workspace Inactivity',
+        description: 'Zero task updates across all team members for 9 consecutive days.',
         severity: 'Critical',
         scoreImpact: -21.0,
         suggestedAction: 'Issue mandatory instructor summon for emergency academic intervention.',
@@ -393,12 +414,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'qm1',
         name: 'Siddharth Rao',
-        email: 's.rao@university.edu',
+        email: 's.rao@example.com',
         role: 'Smart Contract Lead',
         avatarColor: 'bg-emerald-700',
         assignedTasks: 10,
         completedTasks: 7,
-        commits: 34,
         prReviews: 8,
         messagesSent: 28,
         lastActive: 'Yesterday',
@@ -408,12 +428,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'qm2',
         name: 'Elena Rostova',
-        email: 'e.rostova@university.edu',
+        email: 'e.rostova@example.com',
         role: 'Solidity & Test Auditor',
         avatarColor: 'bg-cyan-600',
         assignedTasks: 8,
         completedTasks: 5,
-        commits: 22,
         prReviews: 9,
         messagesSent: 22,
         lastActive: 'Yesterday',
@@ -423,12 +442,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'qm3',
         name: 'Lucas Dupont',
-        email: 'l.dupont@university.edu',
+        email: 'l.dupont@example.com',
         role: 'Frontend DApp & Web3 Provider',
         avatarColor: 'bg-amber-600',
         assignedTasks: 8,
         completedTasks: 3,
-        commits: 12,
         prReviews: 2,
         messagesSent: 14,
         lastActive: '3 days ago',
@@ -438,12 +456,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'qm4',
         name: 'Tara O\'Connor',
-        email: 't.oconnor@university.edu',
+        email: 't.oconnor@example.com',
         role: 'Grid Meter Simulator',
         avatarColor: 'bg-violet-600',
         assignedTasks: 6,
         completedTasks: 2,
-        commits: 9,
         prReviews: 1,
         messagesSent: 11,
         lastActive: '2 days ago',
@@ -547,7 +564,7 @@ export const INITIAL_GROUPS: StudentGroup[] = [
     repoUrl: 'github.com/eecs-ds302/team-horizon-wildfire',
     asanaWorkspace: 'DS302-Team-Horizon',
     taskCompletionScore: 68,
-    overdueTaskScore: 60,
+    overdueTaskScore: 46,
     memberActivityScore: 64,
     workloadEquityScore: 58,
     communicationScore: 60,
@@ -555,12 +572,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'hm1',
         name: 'Nathan Brooks',
-        email: 'n.brooks@university.edu',
+        email: 'n.brooks@example.com',
         role: 'Data Pipeline & GIS',
         avatarColor: 'bg-teal-600',
         assignedTasks: 9,
         completedTasks: 6,
-        commits: 28,
         prReviews: 6,
         messagesSent: 24,
         lastActive: '1 day ago',
@@ -570,12 +586,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'hm2',
         name: 'Amina Idris',
-        email: 'a.idris@university.edu',
+        email: 'a.idris@example.com',
         role: 'Computer Vision / UNet Lead',
         avatarColor: 'bg-pink-600',
         assignedTasks: 8,
         completedTasks: 5,
-        commits: 24,
         prReviews: 5,
         messagesSent: 20,
         lastActive: '1 day ago',
@@ -585,12 +600,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'hm3',
         name: 'Leo Takahashi',
-        email: 'l.takahashi@university.edu',
+        email: 'l.takahashi@example.com',
         role: 'Web Map Tile Server & API',
         avatarColor: 'bg-sky-600',
         assignedTasks: 8,
         completedTasks: 4,
-        commits: 16,
         prReviews: 3,
         messagesSent: 15,
         lastActive: '3 days ago',
@@ -682,12 +696,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'am1',
         name: 'Maya Lin',
-        email: 'm.lin@university.edu',
+        email: 'm.lin@example.com',
         role: 'NLP & Evaluation Lead',
         avatarColor: 'bg-emerald-600',
         assignedTasks: 9,
         completedTasks: 8,
-        commits: 41,
         prReviews: 14,
         messagesSent: 52,
         lastActive: '25 mins ago',
@@ -697,12 +710,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'am2',
         name: 'Lucas Thorne',
-        email: 'l.thorne@university.edu',
+        email: 'l.thorne@example.com',
         role: 'MedDRA Ontology & Parser',
         avatarColor: 'bg-blue-600',
         assignedTasks: 8,
         completedTasks: 8,
-        commits: 38,
         prReviews: 12,
         messagesSent: 46,
         lastActive: '1 hour ago',
@@ -712,12 +724,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'am3',
         name: 'Zoe Washington',
-        email: 'z.washington@university.edu',
+        email: 'z.washington@example.com',
         role: 'Validation & Benchmark Metric',
         avatarColor: 'bg-purple-600',
         assignedTasks: 8,
         completedTasks: 7,
-        commits: 35,
         prReviews: 15,
         messagesSent: 41,
         lastActive: '3 hours ago',
@@ -727,12 +738,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'am4',
         name: 'Kenji Sato',
-        email: 'k.sato@university.edu',
+        email: 'k.sato@example.com',
         role: 'Clinician UI & Annotation Tool',
         avatarColor: 'bg-teal-600',
         assignedTasks: 8,
         completedTasks: 7,
-        commits: 36,
         prReviews: 11,
         messagesSent: 44,
         lastActive: '2 hours ago',
@@ -836,12 +846,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'cm1',
         name: 'Hannah Abbott',
-        email: 'h.abbott@university.edu',
+        email: 'h.abbott@example.com',
         role: 'Crypto & Protocol Security',
         avatarColor: 'bg-indigo-600',
         assignedTasks: 8,
         completedTasks: 7,
-        commits: 38,
         prReviews: 10,
         messagesSent: 35,
         lastActive: '1 hour ago',
@@ -851,12 +860,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'cm2',
         name: 'Liam Vance',
-        email: 'l.vance@university.edu',
+        email: 'l.vance@example.com',
         role: 'eBPF Kernel Probes',
         avatarColor: 'bg-emerald-600',
         assignedTasks: 7,
         completedTasks: 6,
-        commits: 32,
         prReviews: 9,
         messagesSent: 31,
         lastActive: '2 hours ago',
@@ -866,12 +874,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'cm3',
         name: 'Sofia Rossi',
-        email: 's.rossi@university.edu',
+        email: 's.rossi@example.com',
         role: 'Certificate Authority & Envoy Proxy',
         avatarColor: 'bg-violet-600',
         assignedTasks: 7,
         completedTasks: 6,
-        commits: 30,
         prReviews: 8,
         messagesSent: 29,
         lastActive: '4 hours ago',
@@ -963,47 +970,44 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'm-v1',
         name: 'Maya Lin',
-        email: 'm.lin@university.edu',
+        email: 'm.lin@example.com',
         role: 'Tech Lead & Hardware Integration',
         avatarColor: 'bg-rose-600',
         assignedTasks: 8,
         completedTasks: 3,
-        commits: 41,
         prReviews: 5,
         messagesSent: 26,
         lastActive: '4 days ago',
-        workloadSharePercent: 64,
+        workloadSharePercent: 100,
         status: 'Overloaded',
       },
       {
         id: 'm-v2',
         name: 'Lucas Vance',
-        email: 'l.vance@university.edu',
+        email: 'l.vance@example.com',
         role: 'Backend API Engineer',
         avatarColor: 'bg-amber-600',
         assignedTasks: 6,
         completedTasks: 0,
-        commits: 4,
         prReviews: 0,
         messagesSent: 5,
         lastActive: '6 days ago',
-        workloadSharePercent: 20,
-        status: 'At-Risk / Disengaged',
+        workloadSharePercent: 0,
+        status: 'No completed work yet',
       },
       {
         id: 'm-v3',
         name: 'Zoe Chen',
-        email: 'z.chen@university.edu',
+        email: 'z.chen@example.com',
         role: 'Mobile Telemetry & Dashboard',
         avatarColor: 'bg-slate-600',
         assignedTasks: 5,
         completedTasks: 0,
-        commits: 2,
         prReviews: 1,
         messagesSent: 3,
         lastActive: '8 days ago',
-        workloadSharePercent: 16,
-        status: 'At-Risk / Disengaged',
+        workloadSharePercent: 0,
+        status: 'No completed work yet',
       },
     ],
     tasks: [
@@ -1165,12 +1169,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'm-s1',
         name: 'Elena Rostova',
-        email: 'e.rostova@university.edu',
+        email: 'e.rostova@example.com',
         role: 'Tech Lead & Optimization Modeling',
         avatarColor: 'bg-emerald-600',
         assignedTasks: 8,
         completedTasks: 7,
-        commits: 46,
         prReviews: 14,
         messagesSent: 42,
         lastActive: '22m ago',
@@ -1180,12 +1183,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'm-s2',
         name: 'Kai Zhang',
-        email: 'k.zhang@university.edu',
+        email: 'k.zhang@example.com',
         role: 'Distributed Consensus & Grid Telemetry',
         avatarColor: 'bg-blue-600',
         assignedTasks: 7,
         completedTasks: 6,
-        commits: 41,
         prReviews: 12,
         messagesSent: 38,
         lastActive: '1 hour ago',
@@ -1195,12 +1197,11 @@ export const INITIAL_GROUPS: StudentGroup[] = [
       {
         id: 'm-s3',
         name: 'Priya Patel',
-        email: 'p.patel@university.edu',
+        email: 'p.patel@example.com',
         role: 'Price Forecasting & ML Pipeline',
         avatarColor: 'bg-teal-600',
         assignedTasks: 7,
         completedTasks: 6,
-        commits: 39,
         prReviews: 11,
         messagesSent: 35,
         lastActive: '3 hours ago',
@@ -1348,7 +1349,7 @@ export const INITIAL_ALERTS: SystemAlert[] = [
     courseCode: 'IS420',
     riskLevel: 'High',
     healthScore: 25.8,
-    contributingFactors: 'Critical Inactivity: 9 days without commits or task updates; 3 overdue sprint milestones.',
+    contributingFactors: 'Critical Inactivity: 9 days without task updates in Asana; 3 overdue sprint milestones.',
     timestamp: '25m ago',
     read: false,
   },

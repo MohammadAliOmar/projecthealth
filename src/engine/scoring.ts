@@ -31,6 +31,66 @@ export const WEIGHTS = {
 };
 
 /**
+ * ONE shared On-Time (Overdue) score function across the entire application:
+ * OnTime = max(0, 100 - 20*N - 2*SumDaysOverdue)
+ * where N = number of incomplete, non-advisory tasks past their due date,
+ * and SumDaysOverdue = total whole days overdue across those tasks.
+ */
+export function calculateOnTimeScore(overdueCount: number, sumDaysOverdue: number): number {
+  const safeCount = Math.max(0, overdueCount);
+  const safeDays = Math.max(0, sumDaysOverdue);
+  return Math.max(0, Math.round(100 - (20 * safeCount) - (2 * safeDays)));
+}
+
+/**
+ * Calculates On-Time score from a list of tasks, filtering out advisory tasks,
+ * tasks authored by the lecturer, or tasks prefixed with [ProjectHealth AI].
+ */
+export function computeTasksOnTimeScore(
+  tasks: Array<{
+    status?: string;
+    dueDate?: string | Date;
+    due_on?: string;
+    title?: string;
+    name?: string;
+    isAdvisory?: boolean;
+    isLecturerAuthored?: boolean;
+    gid?: string;
+  }>,
+  referenceDate: Date = new Date(),
+  advisoryGids: Set<string> = new Set()
+): { overdueCount: number; sumDaysOverdue: number; score: number } {
+  let overdueCount = 0;
+  let sumDaysOverdue = 0;
+  const refTime = referenceDate.getTime();
+  const refMidnight = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate()).getTime();
+
+  for (const t of tasks) {
+    if (!t) continue;
+    const title = t.title || t.name || '';
+    if (title.startsWith('[ProjectHealth AI]')) continue;
+    if (t.isAdvisory || t.isLecturerAuthored) continue;
+    if (t.gid && advisoryGids.has(t.gid)) continue;
+    if (t.status === 'Completed' || (t as any).completed === true) continue;
+
+    const rawDue = t.dueDate || t.due_on;
+    if (!rawDue) continue;
+    const due = typeof rawDue === 'string' ? new Date(rawDue) : rawDue;
+    if (isNaN(due.getTime())) continue;
+
+    if (due.getTime() < refTime) {
+      overdueCount++;
+      const dueMidnight = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
+      const diffDays = Math.max(0, Math.round((refMidnight - dueMidnight) / (1000 * 60 * 60 * 24)));
+      sumDaysOverdue += diffDays;
+    }
+  }
+
+  const score = calculateOnTimeScore(overdueCount, sumDaysOverdue);
+  return { overdueCount, sumDaysOverdue, score };
+}
+
+/**
  * Calculates days between two date objects or ISO strings
  */
 export function getDaysDifference(pastDate: Date | string, referenceDate: Date = new Date()): number {
@@ -91,7 +151,7 @@ export function calculateScoringMetrics(
     }
   }
 
-  const overdueTaskScore = Math.max(0, Math.round(100 - (20 * overdueTasksCount) - (2 * totalDaysOverdue)));
+  const overdueTaskScore = calculateOnTimeScore(overdueTasksCount, totalDaysOverdue);
 
   // 3. Member Activity Score
   let totalMemberScore = 0;

@@ -18,17 +18,14 @@ import {
   ShieldAlert,
   Send,
   Sparkles,
-  GitCommit,
   MessageSquare,
   FileText,
-  Trash2,
-  Plus,
   RefreshCw,
-  UserPlus,
+  Trash2,
 } from 'lucide-react';
 import { StudentGroup, RiskLevel, ProjectTask, TeamMember } from '../types';
 import { calculateHealthScore, getRiskClassification } from '../mockData';
-import { AddMemberModal } from './Modals';
+import { calculateOnTimeScore } from '../engine/scoring';
 import { syncStudentGroupFromAsana } from '../services/asanaService';
 
 interface GroupDetailsViewProps {
@@ -59,29 +56,26 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
   const [trendRange, setTrendRange] = useState<'7' | '14' | '30'>('7');
   const [activeTab, setActiveTab] = useState<'overview' | 'tasks' | 'members' | 'simulator'>('overview');
   const [hoveredPoint, setHoveredPoint] = useState<{ date: string; score: number; event?: string } | null>(null);
-  const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
   const [isSyncingAsana, setIsSyncingAsana] = useState(false);
 
-  // Compute live health score using exact formula
-  const currentHealthScore = useMemo(() => {
-    return calculateHealthScore({
-      taskCompletionScore: group.taskCompletionScore,
-      overdueTaskScore: group.overdueTaskScore,
-      memberActivityScore: group.memberActivityScore,
-      workloadEquityScore: group.workloadEquityScore,
-      communicationScore: group.communicationScore,
+  // Filter out advisory tasks for counts and scores (Item 3b)
+  const nonAdvisoryTasks = useMemo(() => {
+    return group.tasks.filter((t) => {
+      const title = t.title || '';
+      if (title.startsWith('[ProjectHealth AI]')) return false;
+      if ((t as any).isAdvisory || (t as any).isLecturerAuthored) return false;
+      return true;
     });
-  }, [group]);
-
-  const currentRisk = useMemo(() => {
-    return getRiskClassification(currentHealthScore);
-  }, [currentHealthScore]);
+  }, [group.tasks]);
 
   // Tasks statistics
-  const totalTasks = group.tasks.length;
-  const completedTasks = group.tasks.filter((t) => t.status === 'Completed').length;
-  const inProgressTasks = group.tasks.filter((t) => t.status === 'In Progress').length;
-  const overdueTasks = group.tasks.filter((t) => t.status === 'Overdue').length;
+  const totalTasks = nonAdvisoryTasks.length;
+  const completedTasks = nonAdvisoryTasks.filter((t) => t.status === 'Completed').length;
+  const inProgressTasks = nonAdvisoryTasks.filter((t) => t.status === 'In Progress').length;
+  const overdueTasksList = useMemo(() => {
+    return nonAdvisoryTasks.filter((t) => t.status === 'Overdue');
+  }, [nonAdvisoryTasks]);
+  const overdueTasks = overdueTasksList.length;
   const completionPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
   // Trend data selector
@@ -91,118 +85,44 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
     return group.trends.thirtyDays;
   }, [group, trendRange]);
 
-  // Task input state for manual addition
-  const [isAddingTask, setIsAddingTask] = useState(false);
-  const [newTaskTitle, setNewTaskTitle] = useState('');
-  const [newTaskAssignee, setNewTaskAssignee] = useState(group.members[0]?.name || 'Team Member');
-  const [newTaskDueDate, setNewTaskDueDate] = useState('2026-09-28');
-  const [newTaskStatus, setNewTaskStatus] = useState<ProjectTask['status']>('Overdue');
-  const [newTaskPriority, setNewTaskPriority] = useState<ProjectTask['priority']>('High');
-  const [isSyncingTasks, setIsSyncingTasks] = useState(false);
-
-  // Helper to recompute group metrics from a task list
-  const applyTasksUpdate = (updatedTasks: ProjectTask[], additionalUpdates?: Partial<StudentGroup>) => {
-    const total = updatedTasks.length || 1;
-    const newCompleted = updatedTasks.filter((t) => t.status === 'Completed').length;
-    const newOverdue = updatedTasks.filter((t) => t.status === 'Overdue').length;
-
-    // Exact formula inputs
-    const newTaskScore = Math.min(100, Math.round((newCompleted / total) * 100));
-    const overdueRatio = newOverdue / total;
-    const newOverdueScore = Math.max(0, Math.min(100, Math.round(100 - overdueRatio * 120)));
-
-    // Dynamic risk factors
-    const updatedRiskFactors = [...group.riskFactors];
-    const overdueIdx = updatedRiskFactors.findIndex((rf) =>
-      rf.title.toLowerCase().includes('overdue')
-    );
-
-    if (newOverdue > 0) {
-      const overdueFactor = {
-        id: `rf-overdue-${Date.now()}`,
-        title: `Critical Overdue Deliverables (${newOverdue} Overdue Tasks)`,
-        description: `${newOverdue} of ${total} tasks (${Math.round(
-          overdueRatio * 100
-        )}%) are past due date, severely depressing project health.`,
-        severity: newOverdue >= 3 ? ('Critical' as const) : ('Moderate' as const),
-        scoreImpact: Math.round(-overdueRatio * 25 * 10) / 10,
-        suggestedAction: 'Reassign or descope overdue sprint tasks immediately.',
-      };
-      if (overdueIdx >= 0) {
-        updatedRiskFactors[overdueIdx] = overdueFactor;
-      } else {
-        updatedRiskFactors.unshift(overdueFactor);
+  // Calculate total whole days overdue across incomplete overdue tasks
+  const totalDaysOverdue = useMemo(() => {
+    const now = new Date();
+    const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    let sum = 0;
+    overdueTasksList.forEach((t) => {
+      const due = new Date(t.dueDate);
+      if (!isNaN(due.getTime())) {
+        const dueMidnight = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+        const diffDays = Math.round((nowMidnight.getTime() - dueMidnight.getTime()) / (1000 * 60 * 60 * 24));
+        if (diffDays > 0) sum += diffDays;
       }
-    } else if (overdueIdx >= 0) {
-      updatedRiskFactors.splice(overdueIdx, 1);
-    }
-
-    const updatedGroup: StudentGroup = {
-      ...group,
-      tasks: updatedTasks,
-      taskCompletionScore: newTaskScore,
-      overdueTaskScore: newOverdueScore,
-      riskFactors: updatedRiskFactors,
-      ...additionalUpdates,
-    };
-
-    onUpdateGroupScores(updatedGroup);
-  };
-
-  // Handle task status toggle
-  const handleToggleTaskStatus = (taskId: string, newStatus: ProjectTask['status']) => {
-    const updatedTasks = group.tasks.map((t) => {
-      if (t.id === taskId) {
-        return { ...t, status: newStatus };
-      }
-      return t;
     });
-    applyTasksUpdate(updatedTasks);
-  };
+    return sum;
+  }, [overdueTasksList]);
 
-  // Handle delete task
-  const handleDeleteTask = (taskId: string) => {
-    const updatedTasks = group.tasks.filter((t) => t.id !== taskId);
-    applyTasksUpdate(updatedTasks);
-  };
+  // ONE overdue formula everywhere: OnTime = max(0, 100 - 20*N - 2*SumDaysOverdue)
+  const effectiveOverdueScore = useMemo(() => {
+    if (group.tasks && group.tasks.length > 0) {
+      return calculateOnTimeScore(overdueTasks, totalDaysOverdue);
+    }
+    return group.overdueTaskScore;
+  }, [group.tasks, group.overdueTaskScore, overdueTasks, totalDaysOverdue]);
 
-  // Handle add task
-  const handleAddTask = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTaskTitle.trim()) return;
+  // Compute live health score using exact formula
+  const currentHealthScore = useMemo(() => {
+    return calculateHealthScore({
+      taskCompletionScore: group.taskCompletionScore,
+      overdueTaskScore: effectiveOverdueScore,
+      memberActivityScore: group.memberActivityScore,
+      workloadEquityScore: group.workloadEquityScore,
+      communicationScore: group.communicationScore,
+    });
+  }, [group, effectiveOverdueScore]);
 
-    const newTask: ProjectTask = {
-      id: `task-${Date.now()}`,
-      title: newTaskTitle.trim(),
-      assigneeId: group.members[0]?.id || 'm-1',
-      assigneeName: newTaskAssignee,
-      dueDate: newTaskDueDate,
-      status: newTaskStatus,
-      priority: newTaskPriority,
-      weight: 10,
-    };
-
-    applyTasksUpdate([...group.tasks, newTask]);
-    setNewTaskTitle('');
-    setIsAddingTask(false);
-  };
-
-  // Handle Asana task sync
-  const handleSyncAsanaTasks = () => {
-    setIsSyncingTasks(true);
-    setTimeout(() => {
-      setIsSyncingTasks(false);
-      const updatedTasks = group.tasks.map((t) => {
-        if (t.status !== 'Completed') {
-          return { ...t, status: 'Overdue' as const };
-        }
-        return t;
-      });
-      applyTasksUpdate(updatedTasks, {
-        lastActivity: 'Just now (Synced from Asana)',
-      });
-    }, 1000);
-  };
+  const currentRisk = useMemo(() => {
+    return getRiskClassification(currentHealthScore);
+  }, [currentHealthScore]);
 
   const handleSyncThisGroupFromAsana = async () => {
     setIsSyncingAsana(true);
@@ -223,16 +143,6 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
       }
     } finally {
       setIsSyncingAsana(false);
-    }
-  };
-
-  const handleMemberAdded = (updatedGroup: StudentGroup, newMember: TeamMember) => {
-    onUpdateGroupScores(updatedGroup);
-    if (onShowToast) {
-      onShowToast(
-        `Added student ${newMember.name} to team! Total members now: ${updatedGroup.members.length}.`,
-        'success'
-      );
     }
   };
 
@@ -554,15 +464,15 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                   <div className="flex justify-between text-xs mb-1">
                     <span className="text-slate-600">On-Time Delivery (25% weight)</span>
                     <span className="font-mono font-semibold text-slate-900 tabular-nums">
-                      {group.overdueTaskScore}/100 ({Math.round(group.overdueTaskScore * 0.25 * 10) / 10} pts)
+                      {effectiveOverdueScore}/100 ({Math.round(effectiveOverdueScore * 0.25 * 10) / 10} pts)
                     </span>
                   </div>
                   <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
                     <div
                       className={`h-full rounded-full ${
-                        group.overdueTaskScore < 50 ? 'bg-rose-500' : 'bg-indigo-600'
+                        effectiveOverdueScore < 50 ? 'bg-rose-500' : 'bg-indigo-600'
                       }`}
-                      style={{ width: `${group.overdueTaskScore}%` }}
+                      style={{ width: `${effectiveOverdueScore}%` }}
                     />
                   </div>
                 </div>
@@ -961,31 +871,22 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h3 className="text-base font-bold text-slate-900">
-                Task Completion Dashboard & Milestone Status
+                Task Completion Dashboard &amp; Milestone Status
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Tasks tracked directly from Asana integration. You can toggle statuses or add new tasks to reflect your real project state.
+                Tasks come from Asana. To change a task, change it in Asana, then click Sync.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={handleSyncAsanaTasks}
-                disabled={isSyncingTasks}
+                onClick={handleSyncThisGroupFromAsana}
+                disabled={isSyncingAsana}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingTasks ? 'animate-spin text-indigo-600' : ''}`} />
-                <span>{isSyncingTasks ? 'Syncing...' : 'Sync Tasks with Asana'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setIsAddingTask(!isAddingTask)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors shadow-xs cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>{isAddingTask ? 'Close Form' : 'Add Task from Asana'}</span>
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAsana ? 'animate-spin text-indigo-600' : ''}`} />
+                <span>{isSyncingAsana ? 'Syncing...' : 'Sync Tasks with Asana'}</span>
               </button>
 
               <div className="flex items-center gap-1.5 text-xs pl-2 border-l border-slate-200">
@@ -994,64 +895,6 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
               </div>
             </div>
           </div>
-
-          {/* Add Task Inline Form */}
-          {isAddingTask && (
-            <form onSubmit={handleAddTask} className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/50 space-y-3">
-              <div className="font-bold text-xs text-indigo-900 uppercase tracking-wide">
-                Add New Deliverable / Milestone from Asana
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs">
-                <input
-                  type="text"
-                  required
-                  value={newTaskTitle}
-                  onChange={(e) => setNewTaskTitle(e.target.value)}
-                  placeholder="Task title (e.g. End-to-end integration test)"
-                  className="sm:col-span-5 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400"
-                />
-                <input
-                  type="text"
-                  required
-                  value={newTaskAssignee}
-                  onChange={(e) => setNewTaskAssignee(e.target.value)}
-                  placeholder="Assignee name"
-                  className="sm:col-span-3 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-900"
-                />
-                <input
-                  type="date"
-                  required
-                  value={newTaskDueDate}
-                  onChange={(e) => setNewTaskDueDate(e.target.value)}
-                  className="sm:col-span-2 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-900 font-mono text-[11px]"
-                />
-                <select
-                  value={newTaskStatus}
-                  onChange={(e) => setNewTaskStatus(e.target.value as any)}
-                  className="sm:col-span-2 px-2 py-1.5 bg-white border border-slate-200 rounded-lg font-semibold"
-                >
-                  <option value="Overdue">Overdue</option>
-                  <option value="In Progress">In Progress</option>
-                  <option value="Completed">Completed</option>
-                </select>
-              </div>
-              <div className="flex justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setIsAddingTask(false)}
-                  className="px-3 py-1 text-xs text-slate-600 hover:bg-slate-100 rounded-md cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-3.5 py-1 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-md shadow-xs cursor-pointer"
-                >
-                  + Add & Recalculate Health
-                </button>
-              </div>
-            </form>
-          )}
 
           {/* Progress Bar with Color Breakdown */}
           <div className="space-y-1.5">
@@ -1120,14 +963,10 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                   </div>
                 </div>
 
-                {/* Status selector to simulate real-time status update */}
+                {/* Read-only status badge from Asana */}
                 <div className="flex items-center gap-2 self-start sm:self-auto">
-                  <select
-                    value={task.status}
-                    onChange={(e) =>
-                      handleToggleTaskStatus(task.id, e.target.value as ProjectTask['status'])
-                    }
-                    className={`text-xs font-semibold py-1.5 px-3 rounded-lg border cursor-pointer focus:ring-2 focus:ring-indigo-500 ${
+                  <span
+                    className={`text-xs font-semibold py-1 px-3 rounded-lg border ${
                       task.status === 'Completed'
                         ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                         : task.status === 'In Progress'
@@ -1135,19 +974,8 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                         : 'bg-rose-50 text-rose-800 border-rose-200'
                     }`}
                   >
-                    <option value="In Progress">In Progress</option>
-                    <option value="Completed">Completed</option>
-                    <option value="Overdue">Overdue</option>
-                  </select>
-
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteTask(task.id)}
-                    title="Delete task from project"
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                    {task.status}
+                  </span>
                 </div>
               </div>
             ))}
@@ -1169,7 +997,9 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Workload equity &amp; contribution breakdown synced with Asana project tasks.
+                {group.dataSource === 'live'
+                  ? 'Workload equity & contribution breakdown synced with Asana project tasks.'
+                  : 'Workload equity & contribution breakdown calculated from simulated sample data, not from Asana.'}
               </p>
             </div>
 
@@ -1184,15 +1014,6 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                 <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${isSyncingAsana ? 'animate-spin text-indigo-600' : ''}`} />
                 <span>{isSyncingAsana ? 'Syncing...' : 'Sync from Asana'}</span>
               </button>
-
-              <button
-                type="button"
-                onClick={() => setIsAddMemberOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-xs cursor-pointer transition-colors"
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>Add Student Member</span>
-              </button>
             </div>
           </div>
 
@@ -1201,7 +1022,7 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
             <div className="flex items-center justify-between text-xs">
               <span className="font-semibold text-slate-700">How Work is Divided</span>
               <span className="text-slate-500">
-                Fair share per student: ~{Math.round(100 / group.members.length)}%
+                Fair share per student: ~{Math.round(100 / (group.members.length || 1))}%
               </span>
             </div>
 
@@ -1248,25 +1069,25 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                   </div>
 
                   <div className="flex flex-col items-end gap-1">
-                    <span
-                      className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${
-                        member.status === 'Left project'
-                          ? 'bg-slate-100 text-slate-500 border-slate-200'
-                          : member.status === 'Overloaded'
-                          ? 'bg-rose-50 text-rose-700 border-rose-200'
-                          : member.status === 'At-Risk / Disengaged'
-                          ? 'bg-amber-50 text-amber-700 border-amber-200'
-                          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      }`}
-                    >
-                      {member.status === 'Left project'
-                        ? 'Left project'
-                        : member.status === 'Overloaded'
-                        ? 'Doing Too Much'
-                        : member.status === 'At-Risk / Disengaged'
-                        ? 'Not Active'
-                        : 'Balanced'}
-                    </span>
+                    {(() => {
+                      let tagText = 'Balanced';
+                      let tagColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                      if (member.status === 'Left project') {
+                        tagText = 'Left project';
+                        tagColor = 'bg-slate-100 text-slate-500 border-slate-200';
+                      } else if (member.workloadSharePercent > 50 && group.members.length > 1) {
+                        tagText = 'Overloaded';
+                        tagColor = 'bg-rose-50 text-rose-700 border-rose-200';
+                      } else if (member.workloadSharePercent === 0 && group.members.some((m) => m.completedTasks > 0)) {
+                        tagText = 'No completed work yet';
+                        tagColor = 'bg-amber-50 text-amber-700 border-amber-200';
+                      }
+                      return (
+                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${tagColor}`}>
+                          {tagText}
+                        </span>
+                      );
+                    })()}
                     <span className="text-[11px] text-slate-600 font-medium">
                       Workload Share: <strong className="font-mono text-indigo-600">{member.workloadSharePercent}%</strong>
                     </span>
@@ -1274,7 +1095,7 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                 </div>
 
                 {/* Member Metrics */}
-                <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-100 text-center">
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100 text-center">
                   <div className="p-2 rounded-lg bg-slate-50">
                     <div className="text-[10px] text-slate-500 uppercase font-semibold">Tasks Done</div>
                     <div className="text-sm font-bold font-mono text-slate-900 tabular-nums">
@@ -1283,14 +1104,7 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                   </div>
 
                   <div className="p-2 rounded-lg bg-slate-50">
-                    <div className="text-[10px] text-slate-500 uppercase font-semibold">Code Updates</div>
-                    <div className="text-sm font-bold font-mono text-slate-900 tabular-nums">
-                      {member.commits}
-                    </div>
-                  </div>
-
-                  <div className="p-2 rounded-lg bg-slate-50">
-                    <div className="text-[10px] text-slate-500 uppercase font-semibold">Messages</div>
+                    <div className="text-[10px] text-slate-500 uppercase font-semibold">Asana comments</div>
                     <div className="text-sm font-bold font-mono text-slate-900 tabular-nums">
                       {member.messagesSent}
                     </div>
@@ -1322,13 +1136,17 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-indigo-100 text-indigo-800">
                   Formula
                 </span>
-                <span className="text-xs text-slate-500">· Calculated from Asana</span>
+                <span className="text-xs text-slate-500">
+                  {group.dataSource === 'live' ? '· Calculated from Asana' : '· Calculated from simulated sample data, not from Asana'}
+                </span>
               </div>
               <h3 className="text-lg font-bold text-slate-900 mt-1">
                 How This Health Score is Calculated
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                These scores come directly from your Asana tasks, due dates, and student contributions.
+                {group.dataSource === 'live'
+                  ? 'These scores come directly from your Asana tasks, due dates, and student contributions.'
+                  : 'Calculated from simulated sample data, not from Asana.'}
               </p>
             </div>
 
@@ -1355,7 +1173,7 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
           <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100">
             <div className="bg-slate-50 px-4 py-2.5 grid grid-cols-12 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
               <div className="col-span-4">Category &amp; Importance</div>
-              <div className="col-span-4">What We Count from Asana</div>
+              <div className="col-span-4">What We Count</div>
               <div className="col-span-2 text-center">Score</div>
               <div className="col-span-2 text-right">Points Earned</div>
             </div>
@@ -1385,15 +1203,15 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
               </div>
               <div className="col-span-4 text-slate-700">
                 <span className={`font-semibold ${overdueTasks > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                  {overdueTasks} late
-                </span>{' '}
-                out of {totalTasks} tasks ({totalTasks > 0 ? Math.round((overdueTasks / totalTasks) * 100) : 0}% late)
+                  {overdueTasks} late task{overdueTasks === 1 ? '' : 's'}
+                </span>
+                {overdueTasks > 0 ? `, ${totalDaysOverdue} day${totalDaysOverdue === 1 ? '' : 's'} late in total` : ', 0 days late in total'}
               </div>
-              <div className={`col-span-2 text-center font-mono font-bold ${group.overdueTaskScore < 50 ? 'text-rose-600' : 'text-slate-900'}`}>
-                {group.overdueTaskScore}/100
+              <div className={`col-span-2 text-center font-mono font-bold ${effectiveOverdueScore < 50 ? 'text-rose-600' : 'text-slate-900'}`}>
+                {effectiveOverdueScore}/100
               </div>
               <div className="col-span-2 text-right font-mono font-bold text-indigo-600">
-                +{(Math.round(group.overdueTaskScore * 0.25 * 10) / 10).toFixed(1)} pts
+                +{(Math.round(effectiveOverdueScore * 0.25 * 10) / 10).toFixed(1)} pts
               </div>
             </div>
 
@@ -1404,7 +1222,7 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                 <div className="text-[11px] text-slate-500">Weight: 20% of total score</div>
               </div>
               <div className="col-span-4 text-slate-700">
-                {group.members.length} students actively completing tasks and commits in Asana
+                {group.members.length} students with recent task activity in {group.dataSource === 'live' ? 'Asana' : 'simulated sample data'}
               </div>
               <div className="col-span-2 text-center font-mono font-bold text-slate-900">
                 {group.memberActivityScore}/100
@@ -1438,7 +1256,7 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
                 <div className="text-[11px] text-slate-500">Weight: 10% of total score</div>
               </div>
               <div className="col-span-4 text-slate-700">
-                Team discussion and updates in Asana
+                {group.dataSource === 'live' ? 'Team discussion and updates in Asana' : 'Team discussion and updates in simulated sample data'}
               </div>
               <div className="col-span-2 text-center font-mono font-bold text-slate-900">
                 {group.communicationScore}/100
@@ -1452,19 +1270,15 @@ export const GroupDetailsView: React.FC<GroupDetailsViewProps> = ({
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1">
             <div className="font-semibold text-slate-900">How to update this project's Health Score:</div>
             <p>
-              Scores are never changed by hand. When students finish tasks or update work in Asana, click <strong>"Sync with Asana"</strong> to get the latest status. The health score updates automatically.
+              {group.dataSource === 'live' ? (
+                <>Scores are never changed by hand. When students finish tasks or update work in Asana, click <strong>"Sync with Asana"</strong> to get the latest status. The health score updates automatically.</>
+              ) : (
+                <>Scores are never changed by hand. This project uses simulated sample data. Click <strong>"Sync with Asana"</strong> if you connect a live Asana project.</>
+              )}
             </p>
           </div>
         </div>
       )}
-
-      {/* Add Student Member Modal */}
-      <AddMemberModal
-        isOpen={isAddMemberOpen}
-        onClose={() => setIsAddMemberOpen(false)}
-        group={group}
-        onMemberAdded={handleMemberAdded}
-      />
     </div>
   );
 };

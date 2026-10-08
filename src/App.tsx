@@ -79,9 +79,23 @@ export default function App() {
   // Active view: null shows the Dashboard; a group ID shows GroupDetailsView
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
 
-  // Asana Sync State
+  // Asana Sync State: real last-sync time stored for the signed-in lecturer, or "Not synced yet"
   const [isSyncingAsana, setIsSyncingAsana] = useState(false);
-  const [lastSynced, setLastSynced] = useState('Today, 10:45 AM');
+  const [lastSynced, setLastSynced] = useState<string>(() => {
+    if (typeof window !== 'undefined' && currentUser) {
+      return localStorage.getItem(`last_synced_${currentUser.id}`) || 'Not synced yet';
+    }
+    return 'Not synced yet';
+  });
+
+  useEffect(() => {
+    if (currentUser) {
+      const stored = localStorage.getItem(`last_synced_${currentUser.id}`);
+      setLastSynced(stored || 'Not synced yet');
+    } else {
+      setLastSynced('Not synced yet');
+    }
+  }, [currentUser]);
 
   // Popup Modals State
   const [isSendMessageOpen, setIsSendMessageOpen] = useState(false);
@@ -326,6 +340,9 @@ export default function App() {
       const now = new Date();
       const formatted = `Today, ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
       setLastSynced(formatted);
+      if (currentUser) {
+        localStorage.setItem(`last_synced_${currentUser.id}`, formatted);
+      }
 
       showToast(
         `Asana Synced: Refreshed members, tasks & health metrics for ${syncedGroups.length} projects.`,
@@ -333,7 +350,7 @@ export default function App() {
       );
     } catch (err: any) {
       console.warn('Sync notice:', err);
-      showToast('Synced projects with Asana', 'info');
+      showToast(err.message || 'Unable to sync projects from Asana', 'warning');
     } finally {
       setIsSyncingAsana(false);
     }

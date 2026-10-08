@@ -198,7 +198,7 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
       ...baseGroup,
       dataSource: isLive ? 'live' : 'simulated',
       lastSyncedAt: isLive ? new Date().toISOString() : undefined,
-      lastActivity: isLive ? 'Just now (Synced from Asana)' : 'Just now (Simulated)',
+      lastActivity: isLive ? 'Just now (Synced from Asana)' : '9 hours ago',
     };
 
     onAddProject(group);
@@ -244,7 +244,7 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-              Quick Pick Student IDs from Capstone Cohort:
+              Demo sample teams (simulated data):
             </span>
             <span className="text-[11px] text-slate-400">Click to fill</span>
           </div>

@@ -10,12 +10,12 @@ export interface TeamMember {
   avatarColor: string;
   assignedTasks: number;
   completedTasks: number;
-  commits: number;
+  commits?: number;
   prReviews: number;
   messagesSent: number;
   lastActive: string;
   workloadSharePercent: number;
-  status: 'Balanced' | 'Overloaded' | 'At-Risk / Disengaged' | 'Left project';
+  status: 'Balanced' | 'Overloaded' | 'No completed work yet' | 'At-Risk / Disengaged' | 'Left project';
   asanaGid?: string;
 }
 

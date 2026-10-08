@@ -9,7 +9,7 @@ import {
   AsanaTaskRaw,
 } from './src/services/asanaService';
 import { getRiskClassification, calculateHealthScore } from './src/mockData';
-import { computeHealthScore } from './src/engine/scoring';
+import { computeHealthScore, calculateOnTimeScore, computeTasksOnTimeScore } from './src/engine/scoring';
 import { StudentGroup, SentTeamMessage } from './src/types';
 
 let passed = 0;
@@ -486,6 +486,103 @@ async function runAllTests() {
   assert(getRiskClassification(70) === 'Low', 'Score 70 classifies as Low Risk (70 - 100)');
   assert(getRiskClassification(0) === 'High', 'Score 0 classifies as High Risk');
   assert(getRiskClassification(100) === 'Low', 'Score 100 classifies as Low Risk');
+  console.log('');
+
+  // --------------------------------------------------------------------------
+  // NEW SUITE 6: ONE Shared Overdue (On-Time) Formula Verification
+  // Formula: OnTime = max(0, 100 - 20*N - 2*SumDaysOverdue)
+  // --------------------------------------------------------------------------
+  console.log('--- Suite 6: ONE Shared Overdue Formula Verification ---');
+
+  // 2 overdue tasks (4 and 3 days) -> 100 - 20*2 - 2*(4 + 3) = 46
+  const score2Tasks = calculateOnTimeScore(2, 7);
+  assert(score2Tasks === 46, `2 overdue tasks (4 and 3 days) -> 46 (actual: ${score2Tasks})`);
+
+  // 0 overdue -> 100
+  const score0Tasks = calculateOnTimeScore(0, 0);
+  assert(score0Tasks === 100, `0 overdue -> 100 (actual: ${score0Tasks})`);
+
+  // heavy overdue clamps at 0
+  const scoreHeavy = calculateOnTimeScore(10, 150);
+  assert(scoreHeavy === 0, `Heavy overdue clamps at 0 (actual: ${scoreHeavy})`);
+
+  // Advisory tasks ignored in On-Time calculations
+  const refDate = new Date('2026-10-08T12:00:00Z');
+  const sampleTasks = [
+    { title: 'Regular Task 1', dueDate: '2026-10-04T12:00:00Z', status: 'Overdue' }, // 4 days overdue
+    { title: 'Regular Task 2', dueDate: '2026-10-05T12:00:00Z', status: 'Overdue' }, // 3 days overdue
+    { title: '[ProjectHealth AI] Lecturer advisory: Sprint review', dueDate: '2026-10-01T12:00:00Z', status: 'Overdue', isAdvisory: true }, // ignored
+    { title: 'Lecturer task', dueDate: '2026-10-02T12:00:00Z', status: 'Overdue', isLecturerAuthored: true }, // ignored
+  ];
+  const evaluatedTasks = computeTasksOnTimeScore(sampleTasks, refDate);
+  assert(evaluatedTasks.overdueCount === 2, `Advisory tasks ignored: overdueCount is 2 (actual: ${evaluatedTasks.overdueCount})`);
+  assert(evaluatedTasks.sumDaysOverdue === 7, `Advisory tasks ignored: sumDaysOverdue is 7 (actual: ${evaluatedTasks.sumDaysOverdue})`);
+  assert(evaluatedTasks.score === 46, `Advisory tasks ignored: OnTime score is 46 (actual: ${evaluatedTasks.score})`);
+  console.log('');
+
+  // --------------------------------------------------------------------------
+  // NEW SUITE 7: Live Data Protection Against Overwriting By Sample Data
+  // --------------------------------------------------------------------------
+  console.log('--- Suite 7: Live Data Protection (No Token Missing Sync) ---');
+  const liveProjectToProtect: StudentGroup = {
+    id: 'grp-live-real',
+    name: 'Real Live Project',
+    projectTitle: 'Real Production App',
+    courseCode: 'CS401',
+    courseName: 'Capstone',
+    lastActivity: '1 hour ago',
+    lastActivityTimestamp: '2026-10-08T09:00:00Z',
+    teamLeader: 'Alice Smith',
+    repoUrl: 'github.com/real/repo',
+    asanaWorkspace: '1219253588419555',
+    dataSource: 'live',
+    taskCompletionScore: 85,
+    overdueTaskScore: 75,
+    memberActivityScore: 80,
+    workloadEquityScore: 70,
+    communicationScore: 65,
+    members: [
+      {
+        id: 'm1',
+        name: 'Alice Smith',
+        email: 'alice@example.com',
+        role: 'Lead',
+        avatarColor: 'bg-indigo-600',
+        assignedTasks: 5,
+        completedTasks: 4,
+        commits: 12,
+        prReviews: 3,
+        messagesSent: 12,
+        lastActive: 'Today',
+        workloadSharePercent: 60,
+        status: 'Overloaded',
+      },
+    ],
+    tasks: [],
+    riskFactors: [],
+    trends: { sevenDays: [], fourteenDays: [], thirtyDays: [] },
+  };
+
+  let tokenMissingErrorThrown = false;
+  let tokenMissingErrorMessage = '';
+  try {
+    // Calling sync with empty token for a live dataSource project
+    await syncStudentGroupFromAsana(liveProjectToProtect, '');
+  } catch (err: any) {
+    tokenMissingErrorThrown = true;
+    tokenMissingErrorMessage = err.message || '';
+  }
+
+  assert(tokenMissingErrorThrown, 'syncStudentGroupFromAsana threw error when syncing live project without token');
+  assert(
+    tokenMissingErrorMessage === 'Paste your Asana token to sync this project.',
+    `Throws exact message: "Paste your Asana token to sync this project." (actual: "${tokenMissingErrorMessage}")`
+  );
+  assert(
+    liveProjectToProtect.dataSource === 'live' && liveProjectToProtect.taskCompletionScore === 85,
+    'Live project was NOT overwritten with simulated data and preserved original metrics'
+  );
+  console.log('');
 
   console.log('\n========================================================================');
   console.log(`Results: ${passed} Passed, ${failed} Failed`);

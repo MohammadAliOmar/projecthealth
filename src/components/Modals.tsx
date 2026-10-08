@@ -570,7 +570,8 @@ export const RequestMeetingModal: React.FC<RequestMeetingModalProps> = ({
   group,
   onScheduleSuccess,
 }) => {
-  const [date, setDate] = useState('2026-10-06');
+  const todayStr = new Date().toISOString().split('T')[0];
+  const [date, setDate] = useState(todayStr);
   const [time, setTime] = useState('14:30');
   const [duration, setDuration] = useState('30');
   const [meetingType, setMeetingType] = useState('Virtual (Zoom / Teams)');
@@ -626,6 +627,7 @@ export const RequestMeetingModal: React.FC<RequestMeetingModalProps> = ({
               <input
                 type="date"
                 required
+                min={todayStr}
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
                 className="w-full text-xs py-2 px-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:ring-2 focus:ring-indigo-500"
@@ -759,8 +761,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
           <div>
-            <h3 className="font-bold text-slate-900 text-base">Alerts &amp; Sync Settings</h3>
-            <p className="text-xs text-slate-500">Configure your alert preferences and Asana integration</p>
+            <h3 className="font-bold text-slate-900 text-base">Alert Settings</h3>
+            <p className="text-xs text-slate-500">Configure your in-app risk alert preferences</p>
           </div>
           <button
             type="button"
@@ -776,10 +778,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <label className="flex items-center justify-between p-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100/60 transition-colors cursor-pointer">
               <div className="pr-3">
                 <div className="text-xs font-semibold text-slate-900">
-                  Critical High-Risk Alerts
+                  In-app high-risk alerts
                 </div>
                 <div className="text-[11px] text-slate-500">
-                  Send immediate alert when a project health score drops below 40
+                  Show immediate notifications in the notification bell when a project health score drops below 40
                 </div>
               </div>
               <input
@@ -792,43 +794,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               />
             </label>
 
-            <label className="flex items-center justify-between p-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100/60 transition-colors cursor-pointer">
-              <div className="pr-3">
-                <div className="text-xs font-semibold text-slate-900">
-                  Daily Morning Digest (08:00 AM)
-                </div>
-                <div className="text-[11px] text-slate-500">
-                  Daily summary email of all active project groups and risk changes
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={formData.dailyDigest}
-                onChange={(e) =>
-                  setFormData({ ...formData, dailyDigest: e.target.checked })
-                }
-                className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
-              />
-            </label>
-
-            <label className="flex items-center justify-between p-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100/60 transition-colors cursor-pointer">
-              <div className="pr-3">
-                <div className="text-xs font-semibold text-slate-900">
-                  Asana Background Auto-Sync
-                </div>
-                <div className="text-[11px] text-slate-500">
-                  Periodically poll Asana workspaces for updated task statuses and overdue deadlines
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={formData.asanaWebhookSync}
-                onChange={(e) =>
-                  setFormData({ ...formData, asanaWebhookSync: e.target.checked })
-                }
-                className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
-              />
-            </label>
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600">
+              Scores refresh only when you click a Sync button.
+            </div>
           </div>
 
           <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { StudentGroup, RiskLevel } from '../types';
 import { calculateHealthScore, getRiskClassification } from '../mockData';
+import { calculateOnTimeScore } from '../engine/scoring';
 
 interface LecturerDashboardProps {
   groups: StudentGroup[];
@@ -49,9 +50,31 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({
   // -------------------------------------------------------------------------
   const processedGroups = useMemo(() => {
     return groups.map((g) => {
+      let overdueScore = g.overdueTaskScore;
+      if (g.tasks && g.tasks.length > 0) {
+        const nonAdvisory = g.tasks.filter((t) => {
+          const title = t.title || '';
+          if (title.startsWith('[ProjectHealth AI]')) return false;
+          if ((t as any).isAdvisory || (t as any).isLecturerAuthored) return false;
+          return true;
+        });
+        const overdueTasks = nonAdvisory.filter((t) => t.status === 'Overdue');
+        const now = new Date();
+        const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        let sumDaysOverdue = 0;
+        overdueTasks.forEach((t) => {
+          const due = new Date(t.dueDate);
+          if (!isNaN(due.getTime())) {
+            const dueMidnight = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
+            const diffDays = Math.max(0, Math.round((nowMidnight - dueMidnight) / (1000 * 60 * 60 * 24)));
+            sumDaysOverdue += diffDays;
+          }
+        });
+        overdueScore = calculateOnTimeScore(overdueTasks.length, sumDaysOverdue);
+      }
       const score = calculateHealthScore({
         taskCompletionScore: g.taskCompletionScore,
-        overdueTaskScore: g.overdueTaskScore,
+        overdueTaskScore: overdueScore,
         memberActivityScore: g.memberActivityScore,
         workloadEquityScore: g.workloadEquityScore,
         communicationScore: g.communicationScore,
