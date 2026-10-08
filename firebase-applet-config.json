@@ -1,12 +1,12 @@
 {
   "projectId": "projecthealth-ai",
-  "appId": "1:993159425856:web:66520937b7c02d68a914a5",
+  "appId": "1:993159425856:web:9becaec62cd53f0ba914a5",
   "apiKey": "AIzaSyCtzkILIX9u6DvT-uCH_oZFKf71_NdWwlU",
   "authDomain": "projecthealth-ai.firebaseapp.com",
-  "firestoreDatabaseId": "(default)",
+  "firestoreDatabaseId": "ai-studio-projecthealthais-f6df69e2-5f68-4991-9eff-be54699748ba",
   "storageBucket": "projecthealth-ai.firebasestorage.app",
   "messagingSenderId": "993159425856",
   "measurementId": "",
-  "oAuthClientId": "",
+  "oAuthClientId": "993159425856-r30v4lhjkk31kher9er6qm3i7ni6pcst.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

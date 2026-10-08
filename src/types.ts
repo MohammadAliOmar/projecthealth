@@ -15,7 +15,8 @@ export interface TeamMember {
   messagesSent: number;
   lastActive: string;
   workloadSharePercent: number;
-  status: 'Balanced' | 'Overloaded' | 'At-Risk / Disengaged';
+  status: 'Balanced' | 'Overloaded' | 'At-Risk / Disengaged' | 'Left project';
+  asanaGid?: string;
 }
 
 export interface ProjectTask {
@@ -64,6 +65,7 @@ export interface SentTeamMessage {
   content: string;
   timestamp: string;
   channels: string[];
+  taskGid?: string;
 }
 
 export interface StudentGroup {
@@ -77,6 +79,8 @@ export interface StudentGroup {
   teamLeader: string;
   repoUrl: string;
   asanaWorkspace: string;
+  dataSource?: 'live' | 'simulated';
+  lastSyncedAt?: string;
   
   // Factor scores (0 - 100)
   taskCompletionScore: number; // weight 0.30

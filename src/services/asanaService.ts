@@ -16,6 +16,10 @@ export interface AsanaTaskRaw {
   due_on?: string | null;
   due_at?: string | null;
   created_at?: string;
+  created_by?: {
+    gid: string;
+    name?: string;
+  } | null;
   modified_at?: string;
   assignee?: {
     gid: string;
@@ -73,9 +77,25 @@ export interface FetchedAsanaData {
  * - "https://app.asana.com/0/1219253588419555/list" -> "1219253588419555"
  * - "https://app.asana.com/0/1219253588419555/board" -> "1219253588419555"
  */
+export class AsanaApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+    this.name = 'AsanaApiError';
+  }
+}
+
+/**
+ * Extracts a numeric project GID from an Asana URL or raw ID string.
+ * Supports newer address form https://app.asana.com/1/{workspaceId}/project/{projectId}/... (tested first).
+ * Keeps: plain digits, "grp-" prefix, older https://app.asana.com/0/{projectId}/..., and portfolio URLs.
+ * Returns empty string if no valid ID can be found.
+ */
 export function extractAsanaProjectId(input: string): string {
   if (!input) return '';
   let trimmed = input.trim();
+  if (!trimmed) return '';
 
   // Strip leading grp- prefix if present
   if (trimmed.startsWith('grp-')) {
@@ -87,16 +107,41 @@ export function extractAsanaProjectId(input: string): string {
     return trimmed;
   }
 
-  // If Asana URL matching /0/{projectId} or project/{id} or 6+ digits
-  const match =
-    trimmed.match(/asana\.com\/0\/(\d+)/i) ||
-    trimmed.match(/project\/(\d+)/i) ||
-    trimmed.match(/(\d{6,})/);
-  if (match && match[1]) {
-    return match[1];
+  // 5: Support newer address form FIRST:
+  // https://app.asana.com/1/{workspaceId}/project/{projectId}/...
+  const newerMatch = trimmed.match(/asana\.com\/1\/\d+\/project\/(\d+)/i);
+  if (newerMatch && newerMatch[1]) {
+    return newerMatch[1];
   }
 
-  return trimmed;
+  // Generic /project/{projectId} pattern
+  const projectMatch = trimmed.match(/\/project\/(\d+)/i);
+  if (projectMatch && projectMatch[1]) {
+    return projectMatch[1];
+  }
+
+  // Older address form: https://app.asana.com/0/{projectId}/...
+  const olderMatch = trimmed.match(/asana\.com\/0\/(\d+)/i);
+  if (olderMatch && olderMatch[1]) {
+    return olderMatch[1];
+  }
+
+  // Portfolio URLs: https://app.asana.com/0/portfolio/{portfolioId}/list/project/{projectId} or similar
+  const portfolioMatch =
+    trimmed.match(/portfolio\/\d+.*?\/(\d{6,})/i) ||
+    trimmed.match(/portfolio\/.*?project\/(\d+)/i);
+  if (portfolioMatch && portfolioMatch[1]) {
+    return portfolioMatch[1];
+  }
+
+  // Any asana.com URL containing 6+ digits representing a project
+  const asanaDigitsMatch = trimmed.match(/asana\.com\/.*?(\d{6,})/i);
+  if (asanaDigitsMatch && asanaDigitsMatch[1]) {
+    return asanaDigitsMatch[1];
+  }
+
+  // If no valid ID can be extracted, return an empty string
+  return '';
 }
 
 /**
@@ -110,12 +155,12 @@ export async function fetchLiveAsanaProject(
 ): Promise<{ project: AsanaProjectRaw; tasks: AsanaTaskRaw[] }> {
   const projectId = extractAsanaProjectId(projectIdOrUrl);
   if (!projectId) {
-    throw new Error('Please enter a valid Asana Project URL or Project ID.');
+    throw new AsanaApiError(400, 'Could not find an Asana project ID in that input');
   }
 
   const cleanToken = accessToken.trim();
   if (!cleanToken) {
-    throw new Error('Asana Personal Access Token is required to fetch real project data from Asana.');
+    throw new AsanaApiError(401, 'Asana token rejected');
   }
 
   const headers = {
@@ -130,7 +175,7 @@ export async function fetchLiveAsanaProject(
     `https://app.asana.com/api/1.0/projects/${projectId}?opt_fields=name,workspace.name,workspace.gid,notes,members.name,members.email`,
   ];
 
-  let lastError: Error | null = null;
+  let lastError: AsanaApiError | null = null;
   for (const ep of projectEndpoints) {
     try {
       const res = await fetch(ep, { headers });
@@ -138,25 +183,25 @@ export async function fetchLiveAsanaProject(
         projectRes = res;
         break;
       } else if (res.status === 401) {
-        throw new Error('Invalid or expired Asana Personal Access Token (401 Unauthorized). Please check your token.');
-      } else if (res.status === 404) {
-        throw new Error(`Asana Project ID "${projectId}" not found (404). Please verify the project link or ID.`);
-      } else if (res.status === 403) {
-        throw new Error('Your Asana token does not have permission to view this project (403 Forbidden).');
+        throw new AsanaApiError(401, 'Asana token rejected');
+      } else if (res.status === 404 || res.status === 403) {
+        throw new AsanaApiError(res.status, 'Project not found or not shared with this account');
+      } else if (res.status === 429) {
+        throw new AsanaApiError(429, 'Rate limited, try again shortly');
       } else {
         const errJson = await res.json().catch(() => null);
-        throw new Error(errJson?.errors?.[0]?.message || `Asana API error (${res.status}): ${res.statusText}`);
+        throw new AsanaApiError(res.status, errJson?.errors?.[0]?.message || `Asana API error (${res.status})`);
       }
     } catch (e: any) {
-      lastError = e;
-      if (e.message?.includes('401') || e.message?.includes('404') || e.message?.includes('403')) {
+      if (e instanceof AsanaApiError) {
         throw e;
       }
+      lastError = new AsanaApiError(500, e.message || 'Network error fetching project from Asana');
     }
   }
 
   if (!projectRes) {
-    throw lastError || new Error(`Unable to fetch Asana project "${projectId}". Verify connection and token.`);
+    throw lastError || new AsanaApiError(500, `Unable to fetch Asana project "${projectId}". Verify connection and token.`);
   }
 
   const projectJson = await projectRes.json();
@@ -253,7 +298,14 @@ export async function fetchLiveAsanaProject(
   }
 
   if (!tasksRes || !tasksRes.ok) {
-    throw new Error(`Failed to fetch tasks for Asana project "${projectId}".`);
+    if (tasksRes?.status === 401) {
+      throw new AsanaApiError(401, 'Asana token rejected');
+    } else if (tasksRes?.status === 403 || tasksRes?.status === 404) {
+      throw new AsanaApiError(tasksRes.status, 'Project not found or not shared with this account');
+    } else if (tasksRes?.status === 429) {
+      throw new AsanaApiError(429, 'Rate limited, try again shortly');
+    }
+    throw new AsanaApiError(tasksRes?.status || 500, `Failed to fetch tasks for Asana project "${projectId}".`);
   }
 
   const tasksJson = await tasksRes.json();
@@ -277,33 +329,40 @@ export async function fetchLiveAsanaProject(
   return { project, tasks };
 }
 
+export interface PostMessageResult {
+  success: boolean;
+  simulated?: boolean;
+  taskGid?: string;
+  message: string;
+  membersNotified?: boolean;
+}
+
 /**
- * Posts a real advisory message / announcement directly into the Asana project.
- * It creates a dedicated notice task with the lecturer's message and subject,
- * so the student team sees it directly on their Asana board!
+ * Item 3a & 3d: Posts an advisory message directly into the Asana project.
+ * - Task created WITHOUT a due date
+ * - Name prefixed "[ProjectHealth AI] Lecturer advisory:"
+ * - If member Asana user gids are known, add them as followers
+ * - If not known: message is "Posted to Asana, but members were not notified"
+ * - Returns success ONLY if Asana accepted request (res.ok)
+ * - With no token: returns { success: false, simulated: true, message: "Recorded only. Nothing was posted to Asana." }
  */
 export async function postMessageToAsanaProject(
   projectIdOrUrl: string,
-  accessToken: string,
-  subject: string,
-  message: string,
-  recipientName?: string
-): Promise<{ success: boolean; taskGid?: string; message: string }> {
+  accessToken?: string,
+  subject: string = '',
+  message: string = '',
+  recipientName?: string,
+  memberUserGids?: string[]
+): Promise<PostMessageResult> {
   const projectId = extractAsanaProjectId(projectIdOrUrl);
-  if (!projectId) {
-    return {
-      success: true,
-      taskGid: `notif-${Date.now()}`,
-      message: 'Message recorded and dispatched to students.',
-    };
-  }
-
   const cleanToken = accessToken?.trim();
-  if (!cleanToken) {
+
+  // 3d: With no token, do NOT return a fake success or mock task gid:
+  if (!cleanToken || !projectId) {
     return {
-      success: true,
-      taskGid: `mock-asana-${projectId}-${Date.now()}`,
-      message: `Message logged and queued for Asana project #${projectId}. Connect your Asana PAT token to push live board tasks.`,
+      success: false,
+      simulated: true,
+      message: 'Recorded only. Nothing was posted to Asana.',
     };
   }
 
@@ -313,16 +372,27 @@ export async function postMessageToAsanaProject(
     Accept: 'application/json',
   };
 
-  const bodyData = {
+  // Valid member Asana gids (ignore mock user- prefixes)
+  const followers = (memberUserGids || []).filter(
+    (g) => g && !g.startsWith('user-') && !g.startsWith('m-') && /^\d+$/.test(g)
+  );
+  const hasKnownFollowers = followers.length > 0;
+
+  // 3a: Task created WITHOUT a due date, name prefixed "[ProjectHealth AI] Lecturer advisory:"
+  const bodyData: any = {
     data: {
       projects: [projectId],
-      name: `📢 Lecturer Advisory: ${subject}`,
+      name: `[ProjectHealth AI] Lecturer advisory: ${subject}`,
       notes: `${message}\n\n---\nTarget Recipient: ${recipientName || 'Entire Team'}\nDispatched via ProjectHealth AI\nTimestamp: ${new Date().toLocaleString()}`,
-      due_on: new Date().toISOString().split('T')[0],
     },
   };
 
+  if (hasKnownFollowers) {
+    bodyData.data.followers = followers;
+  }
+
   const endpoints = ['/api/asana/tasks', 'https://app.asana.com/api/1.0/tasks'];
+  let lastErrorMessage = '';
 
   for (const ep of endpoints) {
     try {
@@ -332,111 +402,203 @@ export async function postMessageToAsanaProject(
         body: JSON.stringify(bodyData),
       });
 
+      // 3d: Check res.ok and return success ONLY if Asana accepted
       if (res.ok) {
         const json = await res.json().catch(() => null);
-        const taskGid = json?.data?.gid || projectId;
+        const taskGid = json?.data?.gid;
+        if (!taskGid) {
+          return {
+            success: false,
+            message: 'Asana response missing task GID.',
+          };
+        }
+
+        const notificationMsg = hasKnownFollowers
+          ? `Posted to Asana (Task GID #${taskGid}) and notified team members.`
+          : 'Posted to Asana, but members were not notified';
+
         return {
           success: true,
           taskGid,
-          message: `Successfully posted message directly to Asana project #${projectId} (Task GID #${taskGid}).`,
+          message: notificationMsg,
+          membersNotified: hasKnownFollowers,
         };
+      } else {
+        const errJson = await res.json().catch(() => null);
+        lastErrorMessage = errJson?.errors?.[0]?.message || `Asana API error (${res.status})`;
       }
-    } catch {
-      // try next
+    } catch (err: any) {
+      lastErrorMessage = err?.message || 'Network error communicating with Asana';
     }
   }
 
   return {
-    success: true,
-    message: `Message dispatched and logged for Asana project #${projectId}.`,
+    success: false,
+    message: lastErrorMessage || 'Asana request rejected.',
   };
 }
 
 /**
- * Re-syncs a student group from Asana, pulling the latest members and tasks.
- * If new members were added in Asana, they are integrated into `group.members`,
- * and the member count is updated automatically.
+ * Item 4: Real Workload Shares & Equity Calculation
+ * - Compute each member's raw contribution as completed tasks.
+ *   If no tasks completed, use assigned tasks.
+ *   If that is also zero for everyone, split equally.
+ * - share_i = raw_i / sum(raw) * 100, rounded using largest-remainder method so integer shares total exactly 100.
+ * - Compute workload equity factor:
+ *   if no completed tasks -> 50;
+ *   if one member -> 100;
+ *   otherwise max(0, 100 * (1 - (maxShare - 1/n) / (1 - 1/n))), where maxShare is the largest fraction (0 to 1).
+ */
+export function calculateRealWorkloadShares(
+  members: { name: string; completedTasks?: number; assignedTasks?: number }[]
+): {
+  shares: number[];
+  workloadEquityFactor: number;
+  hasCompletedTasks: boolean;
+  maxShareFraction: number;
+} {
+  const n = members.length;
+  if (n === 0) {
+    return { shares: [], workloadEquityFactor: 50, hasCompletedTasks: false, maxShareFraction: 0 };
+  }
+
+  if (n === 1) {
+    const hasCompleted = (members[0].completedTasks || 0) > 0;
+    return { shares: [100], workloadEquityFactor: 100, hasCompletedTasks: hasCompleted, maxShareFraction: 1.0 };
+  }
+
+  const completedCounts = members.map((m) => Math.max(0, m.completedTasks || 0));
+  const totalCompleted = completedCounts.reduce((acc, c) => acc + c, 0);
+  const hasCompletedTasks = totalCompleted > 0;
+
+  let raw: number[];
+  if (hasCompletedTasks) {
+    raw = completedCounts;
+  } else {
+    const assignedCounts = members.map((m) => Math.max(0, m.assignedTasks || 0));
+    const totalAssigned = assignedCounts.reduce((acc, a) => acc + a, 0);
+    if (totalAssigned > 0) {
+      raw = assignedCounts;
+    } else {
+      raw = new Array(n).fill(1);
+    }
+  }
+
+  const sumRaw = raw.reduce((acc, r) => acc + r, 0) || 1;
+
+  // Largest-remainder method
+  const exactShares = raw.map((r) => (r / sumRaw) * 100);
+  const floorShares = exactShares.map((e) => Math.floor(e));
+  const remainders = exactShares.map((e, idx) => ({ rem: e - floorShares[idx], idx }));
+
+  const currentSum = floorShares.reduce((acc, f) => acc + f, 0);
+  const deficit = 100 - currentSum;
+
+  remainders.sort((a, b) => b.rem - a.rem || a.idx - b.idx);
+
+  const finalShares = [...floorShares];
+  for (let i = 0; i < deficit && i < n; i++) {
+    finalShares[remainders[i].idx] += 1;
+  }
+
+  const maxShareInt = Math.max(...finalShares);
+  const maxShareFraction = maxShareInt / 100;
+
+  let workloadEquityFactor = 50;
+  if (!hasCompletedTasks) {
+    workloadEquityFactor = 50;
+  } else {
+    const ideal = 1 / n;
+    if (maxShareFraction <= ideal) {
+      workloadEquityFactor = 100;
+    } else {
+      const equity = 100 * (1 - (maxShareFraction - ideal) / (1 - ideal));
+      workloadEquityFactor = Math.max(0, Math.min(100, Math.round(equity)));
+    }
+  }
+
+  return {
+    shares: finalShares,
+    workloadEquityFactor,
+    hasCompletedTasks,
+    maxShareFraction,
+  };
+}
+
+/**
+ * Re-syncs a student group from Asana, pulling latest members and tasks.
+ * 4: Real workload shares with largest-remainder rounding (no equal-split normalization).
+ * 6: NO silent fallback to simulated data on failure. Throws/returns error, keeps group unchanged.
+ * 6: Marks members no longer listed in Asana as "Left project" and excludes them from scoring.
  */
 export async function syncStudentGroupFromAsana(
   group: StudentGroup,
   accessToken?: string,
-  fallbackLeadName?: string
+  fallbackLeadName?: string,
+  options?: {
+    lecturerName?: string;
+    lecturerAsanaGid?: string;
+  }
 ): Promise<StudentGroup> {
   const projectId =
     extractAsanaProjectId(group.id) ||
-    extractAsanaProjectId(group.repoUrl) ||
-    '1219253588419555';
-  const cleanToken =
-    accessToken?.trim() ||
-    (typeof window !== 'undefined'
-      ? localStorage.getItem('asana_personal_access_token') || ''
-      : '');
+    extractAsanaProjectId(group.repoUrl);
+
+  if (!projectId) {
+    throw new AsanaApiError(400, 'Could not find an Asana project ID in that input');
+  }
+
+  const cleanToken = accessToken?.trim();
 
   let fetched: FetchedAsanaData;
+  let isLive = false;
 
   if (cleanToken) {
-    try {
-      const { project, tasks } = await fetchLiveAsanaProject(projectId, cleanToken);
-      fetched = processRealAsanaData(project, tasks, {
-        customTeamName: group.name,
-        customCourseCode: group.courseCode,
-        fallbackLeadName: fallbackLeadName || group.teamLeader,
-      });
-    } catch {
-      fetched = generateStudentProjectFromId(projectId, {
-        customTeamName: group.name,
-        customCourseCode: group.courseCode,
-        fallbackLeadName: fallbackLeadName || group.teamLeader,
-      });
-    }
+    // 6: Live fetch. NO catch block that swaps in generated data!
+    // A failed live fetch throws AsanaApiError with status and message.
+    const { project, tasks } = await fetchLiveAsanaProject(projectId, cleanToken);
+    isLive = true;
+
+    // Collect stored advisory task gids from group messages
+    const advisoryGids = (group.messages || [])
+      .map((m) => m.taskGid)
+      .filter(Boolean) as string[];
+
+    fetched = processRealAsanaData(project, tasks, {
+      customTeamName: group.name,
+      customCourseCode: group.courseCode,
+      fallbackLeadName: fallbackLeadName || group.teamLeader,
+      advisoryTaskGids: advisoryGids,
+      lecturerName: options?.lecturerName,
+      lecturerAsanaGid: options?.lecturerAsanaGid,
+    });
   } else {
+    // Demo mode (no token): explicitly simulated
     fetched = generateStudentProjectFromId(projectId, {
       customTeamName: group.name,
       customCourseCode: group.courseCode,
       fallbackLeadName: fallbackLeadName || group.teamLeader,
     });
+    isLive = false;
   }
 
-  // Merge members from Asana with any custom members previously added
-  // Deduplicate by name and email
-  const memberMap = new Map<string, TeamMember>();
+  // 6: During a live sync, mark members who are no longer listed in Asana as "Left project"
+  // and exclude them from scoring, instead of keeping them as active.
+  const finalMembersList: TeamMember[] = [...fetched.members];
 
-  // Seed with fetched members from Asana
-  for (const m of fetched.members) {
-    memberMap.set(m.name.toLowerCase(), m);
-  }
-
-  // Preserve existing members if they aren't duplicates
-  for (const existing of group.members) {
-    const key = existing.name.toLowerCase();
-    if (!memberMap.has(key)) {
-      memberMap.set(key, existing);
-    } else {
-      // Keep existing stats if higher
-      const current = memberMap.get(key)!;
-      memberMap.set(key, {
-        ...current,
-        role: existing.role || current.role,
-        avatarColor: existing.avatarColor || current.avatarColor,
-        commits: Math.max(existing.commits || 0, current.commits || 0),
-        prReviews: Math.max(existing.prReviews || 0, current.prReviews || 0),
-        messagesSent: Math.max(existing.messagesSent || 0, current.messagesSent || 0),
-      });
+  if (isLive) {
+    const liveMemberNames = new Set(fetched.members.map((m) => m.name.toLowerCase()));
+    for (const prev of group.members) {
+      const key = prev.name.toLowerCase();
+      if (!liveMemberNames.has(key)) {
+        finalMembersList.push({
+          ...prev,
+          status: 'Left project',
+          workloadSharePercent: 0,
+        });
+      }
     }
   }
-
-  const combinedMembersList = Array.from(memberMap.values());
-  const memberCount = combinedMembersList.length || 1;
-  const equalShare = Math.floor(100 / memberCount);
-  const remainder = 100 - equalShare * memberCount;
-
-  // Recalculate balanced workload share so total strictly equals 100%
-  const updatedMembersWithShares = combinedMembersList.map((m, idx) => {
-    return {
-      ...m,
-      workloadSharePercent: equalShare + (idx < remainder ? 1 : 0),
-    };
-  });
 
   const updatedGroup = buildStudentGroupFromAsana(
     fetched,
@@ -445,13 +607,16 @@ export async function syncStudentGroupFromAsana(
     fallbackLeadName || group.teamLeader
   );
 
+  const now = new Date();
   return {
     ...updatedGroup,
     id: group.id,
-    members: updatedMembersWithShares,
+    members: finalMembersList,
     messages: group.messages || [],
-    lastActivity: 'Just now (Synced from Asana)',
-    lastActivityTimestamp: new Date().toISOString(),
+    dataSource: isLive ? 'live' : 'simulated',
+    lastSyncedAt: isLive ? now.toISOString() : group.lastSyncedAt,
+    lastActivity: isLive ? 'Just now (Synced from Asana)' : 'Just now (Simulated)',
+    lastActivityTimestamp: now.toISOString(),
   };
 }
 
@@ -609,10 +774,26 @@ export function processRealAsanaData(
     customTeamName?: string;
     customCourseCode?: string;
     fallbackLeadName?: string;
+    advisoryTaskGids?: string[];
+    lecturerName?: string;
+    lecturerAsanaGid?: string;
   }
 ): FetchedAsanaData {
   const now = new Date();
-  const totalTasks = tasks.length;
+
+  // 3b: Filter out lecturer advisory tasks so they never skew completion, overdue, or workload shares!
+  const advisoryGidSet = new Set((options?.advisoryTaskGids || []).filter(Boolean));
+  const filteredTasks = tasks.filter((t) => {
+    if (t.gid && advisoryGidSet.has(t.gid)) return false;
+    const name = (t.name || '').trim();
+    if (name.startsWith('[ProjectHealth AI] Lecturer advisory:') || name.includes('[ProjectHealth AI]')) return false;
+    if (options?.lecturerAsanaGid && (t.assignee?.gid === options.lecturerAsanaGid || t.created_by?.gid === options.lecturerAsanaGid)) {
+      if (name.toLowerCase().includes('advisory') || name.toLowerCase().includes('notice')) return false;
+    }
+    return true;
+  });
+
+  const totalTasks = filteredTasks.length;
 
   let completedCount = 0;
   let overdueCount = 0;
@@ -645,7 +826,7 @@ export function processRealAsanaData(
   let mostOverdueTaskName = '';
   let mostRecentActivityDate: Date | null = null;
 
-  tasks.forEach((t) => {
+  filteredTasks.forEach((t) => {
     // Determine status
     const isCompleted = Boolean(t.completed);
     let isOverdue = false;
@@ -725,27 +906,23 @@ export function processRealAsanaData(
   else memberActivityScore = Math.max(15, 45 - (daysSinceActivity - 7) * 5);
 
   // 4. Workload Equity Score (15% weight)
-  // Calculate variance across members
+  // Item 4: calculateRealWorkloadShares
   const realMembers = Array.from(memberTaskMap.values()).filter((m) => m.name !== 'Unassigned');
-  let workloadEquityScore = 75;
-  let maxWorkloadShare = 0;
+  const workloadCalc = calculateRealWorkloadShares(
+    realMembers.map((m) => ({
+      name: m.name,
+      completedTasks: m.completed,
+      assignedTasks: m.assigned,
+    }))
+  );
+  const workloadEquityScore = workloadCalc.workloadEquityFactor;
+  const maxWorkloadShare = workloadCalc.maxShareFraction;
   let overloadedMember = '';
-
-  if (realMembers.length > 1) {
-    const totalAssignedReal = realMembers.reduce((acc, m) => acc + m.assigned, 0) || 1;
-    realMembers.forEach((m) => {
-      const share = m.assigned / totalAssignedReal;
-      if (share > maxWorkloadShare) {
-        maxWorkloadShare = share;
-        overloadedMember = m.name;
-      }
-    });
-
-    // If 1 member does > 60% of all tasks in a multi-person team, heavy equity penalty
-    if (maxWorkloadShare > 0.6) {
-      workloadEquityScore = Math.max(25, Math.round(80 - (maxWorkloadShare - 0.5) * 100));
-    } else {
-      workloadEquityScore = Math.min(95, Math.round(90 - (maxWorkloadShare - (1 / realMembers.length)) * 30));
+  if (realMembers.length > 1 && workloadCalc.shares.length > 0) {
+    const maxShareVal = Math.max(...workloadCalc.shares);
+    const maxIdx = workloadCalc.shares.indexOf(maxShareVal);
+    if (maxIdx >= 0 && realMembers[maxIdx]) {
+      overloadedMember = realMembers[maxIdx].name;
     }
   }
 
@@ -829,7 +1006,7 @@ export function processRealAsanaData(
   const membersList: TeamMember[] = Array.from(memberTaskMap.entries())
     .filter(([name]) => name !== 'Unassigned')
     .map(([name, stats], idx) => {
-      const share = Math.round((stats.assigned / safeTotal) * 100);
+      const share = workloadCalc.shares[idx] ?? Math.round((stats.assigned / safeTotal) * 100);
       let status: 'Balanced' | 'Overloaded' | 'At-Risk / Disengaged' = 'Balanced';
       if (stats.overdue >= 2 || (stats.assigned === 0 && safeTotal > 3)) {
         status = 'At-Risk / Disengaged';

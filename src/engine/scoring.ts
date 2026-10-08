@@ -49,9 +49,23 @@ export function calculateScoringMetrics(
   activityLogs: ActivityLog[],
   now: Date = new Date()
 ): ScoringMetrics {
+  // 3b: Exclude from ALL scoring inputs any advisory tasks or tasks starting with [ProjectHealth AI]
+  const validTasks = tasks.filter(t => {
+    if (!t) return false;
+    if (t.title && t.title.startsWith('[ProjectHealth AI]')) return false;
+    if ((t as any).name && (t as any).name.startsWith('[ProjectHealth AI]')) return false;
+    if ((t as any).isAdvisory) return false;
+    if ((t as any).isLecturerAuthored) return false;
+    return true;
+  });
+
+  // Exclude members who left the project
+  const activeMembers = members.filter(m => (m as any).status !== 'Left project');
+  const memberCount = Math.max(1, activeMembers.length);
+
   // 1. Task Completion Score
-  const totalTasksCount = tasks.length;
-  const completedTasks = tasks.filter(t => t.status === 'Completed');
+  const totalTasksCount = validTasks.length;
+  const completedTasks = validTasks.filter(t => t.status === 'Completed');
   const completedTasksCount = completedTasks.length;
   const taskCompletionScore = totalTasksCount === 0 
     ? 100 
@@ -63,7 +77,7 @@ export function calculateScoringMetrics(
   let mostOverdueTaskTitle: string | undefined;
   let mostOverdueTaskDays = 0;
 
-  for (const task of tasks) {
+  for (const task of validTasks) {
     if (task.status === 'Completed') continue;
     const due = typeof task.dueDate === 'string' ? new Date(task.dueDate) : task.dueDate;
     if (due.getTime() < now.getTime()) {
@@ -84,8 +98,7 @@ export function calculateScoringMetrics(
   let maxInactiveDays = 0;
   let inactiveMemberName: string | undefined;
 
-  const memberCount = Math.max(1, members.length);
-  for (const member of members) {
+  for (const member of activeMembers) {
     // Find latest activity from activityLogs or member tasks
     let memberLatest = member.joinedAt;
     const memberLogs = activityLogs.filter(l => l.userId === member.id);
@@ -130,7 +143,7 @@ export function calculateScoringMetrics(
     }
 
     maxShare = topCompletedCount / completedTasksCount;
-    const dominant = members.find(m => m.id === topMemberId);
+    const dominant = activeMembers.find(m => m.id === topMemberId);
     dominantMemberName = dominant ? dominant.name : 'A single member';
 
     const idealShare = 1 / memberCount;

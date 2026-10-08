@@ -46,6 +46,8 @@ function serializeGroup(lecturerId: string, group: StudentGroup) {
     teamLeader: group.teamLeader || 'Project Lead',
     repoUrl: group.repoUrl || '',
     asanaWorkspace: group.asanaWorkspace || 'Connected Asana Workspace',
+    dataSource: group.dataSource || 'simulated',
+    lastSyncedAt: group.lastSyncedAt || null,
     
     // Exact factors
     taskCompletionScore: group.taskCompletionScore,
@@ -194,6 +196,7 @@ export async function saveMessageToFirestore(
       content: msg.content,
       timestamp: msg.timestamp,
       channels: msg.channels || ['Email', 'Firestore Log'],
+      taskGid: msg.taskGid || null,
       status: 'Sent',
     });
 
