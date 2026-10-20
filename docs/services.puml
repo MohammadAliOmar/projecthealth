@@ -1,0 +1,78 @@
+@startuml services-and-interface
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 15
+skinparam dpi 160
+skinparam classAttributeIconSize 0
+skinparam roundCorner 6
+skinparam ArrowColor #444444
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #444444
+  BackgroundColor<<layer>> #EAF1FB
+  BackgroundColor<<module>> #F1F7E9
+}
+hide empty members
+hide circle
+
+title Interface, services and scoring
+
+class "Interface components (React)" as UI <<layer>> {
+  App (root component)
+  AuthenticationScreen
+  LecturerDashboard
+  GroupDetailsView
+  AddAsanaProjectModal
+  SendMessageModal
+}
+
+class AsanaService <<module>> {
+  +extractAsanaProjectId(input): string
+  +fetchLiveAsanaProject(id, token)
+  +processRealAsanaData(project, tasks, options)
+  +generateStudentProjectFromId(id, options)
+  +calculateRealWorkloadShares(members)
+  +buildStudentGroupFromAsana(fetched, ...)
+  +syncStudentGroupFromAsana(group, token)
+  +postMessageToAsanaProject(project, token, ...)
+}
+
+class FirestoreProjects <<module>> {
+  +saveStudentGroupToFirestore(lecturerId, group)
+  +loadStudentGroupsFromFirestore(lecturerId)
+  +deleteStudentGroupFromFirestore(lecturerId, id)
+  +saveAllStudentGroupsToFirestore(lecturerId, groups)
+  +saveMessageToFirestore(lecturerId, id, msg)
+}
+
+class ScoreFormulas <<module>> {
+  +calculateHealthScore(scores): number
+  +getRiskClassification(score): RiskLevel
+}
+
+class ScoringEngine <<module>> {
+  +calculateOnTimeScore(overdueCount, daysOverdue)
+  +computeTasksOnTimeScore(tasks, date)
+  +computeHealthScore(metrics): number
+  +getRiskLevel(score, thresholds): RiskLevel
+  +assessGroupHealth(members, tasks, ...)
+}
+
+class AsanaApiError <<extends Error>> {
+  +status: number
+  +AsanaApiError(status, message)
+}
+
+UI ..> AsanaService
+UI ..> FirestoreProjects
+UI ..> ScoreFormulas
+UI ..> ScoringEngine
+AsanaService ..> ScoreFormulas
+AsanaService ..> ScoringEngine
+AsanaService ..> AsanaApiError : throws
+ScoreFormulas .right.> ScoringEngine : re-exports
+
+AsanaService -[hidden]right- FirestoreProjects
+ScoringEngine -[hidden]right- AsanaApiError
+@enduml

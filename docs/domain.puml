@@ -1,0 +1,98 @@
+@startuml domain-model
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 15
+skinparam classAttributeIconSize 0
+skinparam roundCorner 6
+skinparam ArrowColor #444444
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #444444
+  HeaderBackgroundColor #E8EEF7
+}
+hide empty members
+hide circle
+skinparam dpi 160
+
+title Domain model (src/types.ts)
+
+class UserAccount <<interface>> {
+  +id: string
+  +name: string
+  +email: string
+  +role: string
+}
+
+class StudentGroup <<interface>> {
+  +id: string
+  +name: string
+  +courseCode: string
+  +dataSource?: 'live' | 'simulated'
+  +lastSyncedAt?: string
+  +taskCompletionScore: number
+  +overdueTaskScore: number
+  +memberActivityScore: number
+  +workloadEquityScore: number
+  +communicationScore: number
+  +healthScore?: number
+  +calculatedRisk?: RiskLevel
+}
+
+class TeamMember <<interface>> {
+  +id: string
+  +name: string
+  +assignedTasks: number
+  +completedTasks: number
+  +workloadSharePercent: number
+  +status: Balanced | Overloaded | ... | Left project
+}
+
+class ProjectTask <<interface>> {
+  +id: string
+  +title: string
+  +assigneeId: string
+  +dueDate: string
+  +status: Completed | In Progress | Overdue
+}
+
+class RiskFactor <<interface>> {
+  +title: string
+  +severity: Critical | Moderate | Notice
+  +scoreImpact: number
+  +suggestedAction: string
+}
+
+class SentTeamMessage <<interface>> {
+  +subject: string
+  +content: string
+  +channels: string[]
+  +taskGid?: string
+}
+
+class HealthTrendPoint <<interface>> {
+  +day: number
+  +date: string
+  +score: number
+}
+
+class SystemAlert <<interface>> {
+  +groupId: string
+  +riskLevel: Low | Medium | High
+  +healthScore: number
+  +read: boolean
+}
+
+UserAccount "1" --> "0..*" StudentGroup : owns
+StudentGroup "1" *-- "0..*" TeamMember : members
+StudentGroup "1" *-- "0..*" ProjectTask : tasks
+StudentGroup "1" *-- "0..*" RiskFactor : riskFactors
+StudentGroup "1" *-- "0..*" SentTeamMessage : messages
+StudentGroup "1" *-- "0..*" HealthTrendPoint : trends
+ProjectTask "0..*" --> "0..1" TeamMember : assigned to
+SystemAlert "0..*" --> "1" StudentGroup : about
+ProjectTask -[hidden]right- RiskFactor
+RiskFactor -[hidden]right- HealthTrendPoint
+RiskFactor -[hidden]down- SentTeamMessage
+ProjectTask -[hidden]down- TeamMember
+@enduml
