@@ -98,7 +98,23 @@ export const AddAsanaProjectModal: React.FC<AddAsanaProjectModalProps> = ({
     setTeamName(preset.name);
     setCourseCode(preset.course);
     setFetchError(null);
+    setIsFetching(true);
     setFetchedData(null);
+
+    setTimeout(() => {
+      try {
+        const processed = generateStudentProjectFromId(preset.id, {
+          customTeamName: preset.name,
+          customCourseCode: preset.course,
+          fallbackLeadName: currentUserName,
+        });
+        setFetchedData(processed);
+      } catch (err: any) {
+        setFetchError(err.message || 'Error evaluating student project');
+      } finally {
+        setIsFetching(false);
+      }
+    }, 200);
   };
 
   // Handler: Pull real live data from Asana API

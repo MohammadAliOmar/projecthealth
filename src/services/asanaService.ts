@@ -667,14 +667,12 @@ export function generateStudentProjectFromId(
   
   // Hash the ID to produce deterministic variations
   let hash = 0;
-  for (let i = 0; i < cleanId.length; i++) {
-    hash = (hash * 31 + cleanId.charCodeAt(i)) >>> 0;
-  }
-
   const teamPresets = [
     {
+      id: '1201938502948175',
       name: 'socies',
       title: 'Social Media Campaign Platform',
+      course: 'CAP-401',
       members: ['Aiden Zhao', 'Sarah Connor', 'Marcus Bell'],
       taskNames: [
         'Social media audit and competitor benchmark',
@@ -686,10 +684,14 @@ export function generateStudentProjectFromId(
       ],
       overdueIndices: [2, 3],
       completedIndices: [0, 1],
+      overdueDaysMap: { 2: 4, 3: 5 } as Record<number, number>,
+      daysSinceActivity: 1,
     },
     {
+      id: '1208934759238475',
       name: 'CyberGuard',
       title: 'Zero-Trust Cloud Auth Gateway',
+      course: 'SEC-450',
       members: ['Liam Chen', 'Priya Patel', 'Ethan Ross', 'Maya Lin'],
       taskNames: [
         'OAuth2 and OIDC authorization server architecture',
@@ -700,12 +702,16 @@ export function generateStudentProjectFromId(
         'Automated CI/CD security scanning pipeline',
         'User permission role matrix documentation',
       ],
-      overdueIndices: [2, 3, 4],
-      completedIndices: [0, 1],
+      overdueIndices: [1, 2, 3, 4, 5],
+      completedIndices: [0],
+      overdueDaysMap: { 1: 8, 2: 11, 3: 13, 4: 15, 5: 18 } as Record<number, number>,
+      daysSinceActivity: 9,
     },
     {
+      id: '1204859281749283',
       name: 'EcoSense IoT',
       title: 'Campus Energy Footprint Telemetry',
+      course: 'IOT-410',
       members: ['Emma Watson', 'Carlos Gomez', 'Zoe Martin'],
       taskNames: [
         'ESP32 temperature & humidity sensor calibration',
@@ -715,12 +721,16 @@ export function generateStudentProjectFromId(
         'Alerting webhook for abnormal power surges',
         'Solar panel efficiency monitoring module',
       ],
-      overdueIndices: [],
+      overdueIndices: [] as number[],
       completedIndices: [0, 1, 2, 3, 4],
+      overdueDaysMap: {} as Record<number, number>,
+      daysSinceActivity: 0,
     },
     {
+      id: '1209384729384710',
       name: 'FinSage AI',
       title: 'Predictive Student Budgeting Engine',
+      course: 'DAT-430',
       members: ['Noah Williams', 'Fatima Al-Mansoor', 'Lucas Silva', 'Chloe Bennett'],
       taskNames: [
         'Open Banking Plaid API mock transactions sync',
@@ -733,15 +743,32 @@ export function generateStudentProjectFromId(
       ],
       overdueIndices: [1, 2],
       completedIndices: [0, 3],
+      overdueDaysMap: { 1: 4, 2: 5 } as Record<number, number>,
+      daysSinceActivity: 1,
     },
   ];
 
-  // Deterministically select preset based on hash
-  const chosenPreset = teamPresets[hash % teamPresets.length];
+  // 1. Match by preset ID directly
+  let chosenPreset = teamPresets.find((p) => p.id === cleanId);
+
+  // 2. Match by custom team name if specified
+  if (!chosenPreset && options?.customTeamName) {
+    const searchName = options.customTeamName.trim().toLowerCase();
+    chosenPreset = teamPresets.find((p) => p.name.toLowerCase() === searchName);
+  }
+
+  // 3. Deterministically fallback to hash for unknown arbitrary project IDs
+  if (!chosenPreset) {
+    let hash = 0;
+    for (let i = 0; i < cleanId.length; i++) {
+      hash = (hash * 31 + cleanId.charCodeAt(i)) >>> 0;
+    }
+    chosenPreset = teamPresets[hash % teamPresets.length];
+  }
 
   const finalTeamName = options?.customTeamName?.trim() || chosenPreset.name;
   const finalProjectTitle = chosenPreset.title;
-  const courseCode = options?.customCourseCode?.trim() || 'CAP-401';
+  const courseCode = options?.customCourseCode?.trim() || (chosenPreset as any).course || 'CAP-401';
   const leadName = options?.fallbackLeadName || chosenPreset.members[0];
 
   const now = Date.now();
@@ -758,8 +785,12 @@ export function generateStudentProjectFromId(
 
     let dueOn = new Date(now + (idx + 1) * 3 * 86400000).toISOString().split('T')[0];
     if (isOverdue) {
-      dueOn = new Date(now - (idx + 2) * 86400000).toISOString().split('T')[0];
+      const daysOverdue = (chosenPreset as any).overdueDaysMap?.[idx] ?? (idx + 2);
+      dueOn = new Date(now - daysOverdue * 86400000).toISOString().split('T')[0];
     }
+
+    const activityOffsetDays = (chosenPreset as any).daysSinceActivity ?? (idx % 3);
+    const modifiedDate = new Date(now - (activityOffsetDays + (idx % 2)) * 86400000).toISOString();
 
     return {
       gid: `t-${cleanId}-${idx}`,
@@ -768,8 +799,8 @@ export function generateStudentProjectFromId(
       completed_at: isCompleted ? new Date(now - (idx + 1) * 86400000).toISOString() : null,
       due_on: dueOn,
       assignee: assignedMember,
-      created_at: new Date(now - 14 * 86400000).toISOString(),
-      modified_at: new Date(now - (idx % 3) * 86400000).toISOString(),
+      created_at: new Date(now - 30 * 86400000).toISOString(),
+      modified_at: modifiedDate,
     };
   });
 
