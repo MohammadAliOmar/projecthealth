@@ -144,9 +144,9 @@ http://localhost:3000
 2. Enter the student team's **Asana Project ID** (e.g., `1208934759238475` or full Asana URL).
 3. Enter the **Team Name** (e.g., `Social Media Campaign Platform`) and **Course Code** (e.g., `CAP-401`).
 4. **Choose your evaluation mode**:
-   * *With Asana Personal Access Token (PAT)*: Enter your throwaway token and click **"Live Asana REST API"** to connect live.
-   * *Without Token*: Click **"Pull Data from Student ID & Calculate Health"** to assess in simulated demo mode (clearly labeled with a "Simulated" badge).
-5. Review the preview metrics and click **"Add Project to Dashboard"**.
+   * *Without an Asana token (simulated demo mode)*: Click **"Pull Data from Student ID & Calculate Health"**, or click one of the four **sample team** buttons (they fill in the form and assess the team automatically). The numbers are generated from the project ID, and the team is saved with a "Simulated" badge. Leave the token box empty for this mode: the button ignores a typed token, but a team saved while a token is in the box is marked live.
+   * *With an Asana Personal Access Token (PAT)*: Paste your throwaway token. A separate **"Live Asana REST API"** button appears: click it to read the real project from Asana. Only teams added this way are saved as live ("Synced from Asana").
+5. Review the preview metrics and click **"Add Project to Dashboard"**. Adding an ID that is already on the dashboard updates that team in place.
 
 ### 4. Deep-Dive into Project Health Details
 Click any project card to open the **Group Details View**:
@@ -158,14 +158,18 @@ Click any project card to open the **Group Details View**:
 1. In the Group Details view or from the action menu, click **"Send Team Message"**.
 2. Select target recipient (**"Entire Team"** or a specific student).
 3. Enter the Subject and Message instructions.
-4. Click **"Send Message"**:
-   * Posts an advisory notice to the Asana board without a due date, prefixed `[ProjectHealth AI] Lecturer advisory:`, and notifies student followers if known.
+4. To post to Asana, click **"Asana PAT Token Settings"** and paste your throwaway token (this dialog has its own token box). Then click **"Send & Dispatch Message"**:
+   * With a token, posts an advisory notice to the Asana board without a due date, prefixed `[ProjectHealth AI] Lecturer advisory:`, and notifies student followers if known. Without a token nothing is posted: the dialog says *"Recorded only. Nothing was posted to Asana."*
    * Records a persistent entry in Cloud Firestore audit logs (`groups/{id}/messages`).
    * **Score Integrity Guarantee**: Dispatched advisories are excluded from all scoring inputs and never alter the team's Communication factor score (communication reflects student activity only).
    * Provides one-click shortcuts to compose in **Web Gmail** or your native email client (`mailto:`).
 
 ### 6. Synchronize Asana Updates
-When students complete tasks or add new teammates in Asana, click **"Sync from Asana"**. The dashboard pulls the latest live data. If a live fetch fails, the last good data is preserved and a clear error is shown. During live syncs, members no longer in Asana are marked "Left project" and excluded from active scoring.
+Scores are refreshed only when you click a Sync button: **"Sync with Asana"** in the top bar (all teams) or one of the sync buttons on a team's details page, such as **"Sync from Asana"** (one team).
+
+* **Simulated teams** are regenerated from their project ID.
+* **Live teams** (added with a token) need the token again, but no Sync button asks for it, so a live team shows *"Paste your Asana token to sync this project."* and keeps its last good data. Because the top-bar button treats all teams as one job, that message appears for every team while a live team is on the dashboard, and no team is updated. To refresh a live team, add it again with its token: the existing card is updated in place.
+* If a live fetch fails, the last good data is preserved and a clear error is shown.
 
 ---
 
@@ -176,6 +180,9 @@ When students complete tasks or add new teammates in Asana, click **"Sync from A
 | `port 3000 is already in use` | Another program or previous instance is running on port 3000. | Terminate the existing process or restart your terminal. |
 | `Cannot find module` or build error | Missing dependencies after unzipping. | Run `npm install` in the project root directory. |
 | Asana API fetch returns `401 Unauthorized` | Asana Personal Access Token is expired or invalid. | Generate a fresh PAT in Asana under *Developer App Console*, or use the direct evaluation mode. |
+| "Paste your Asana token to sync this project." | The team was added with a token, so it is live, and the Sync buttons cannot send a token. | Add the team again with its token (the card updates in place). Until then the top-bar sync also fails for the other teams. |
+| A simulated team's score is lower than yesterday | Simulated due dates are fixed when the team is added, while the on-time factor is recalculated against today's date. | Expected for sample data. Add the sample team again to reset it. |
+| The alert bell is empty on another computer or browser | Alerts are kept in the browser's local storage, not in Firestore. | Expected in this prototype. Alerts are raised when a Medium or High Risk team is added. |
 | Reset email not arriving | University firewall or spam filter delay. | Check the spam / junk folder for the Firebase reset email. |
 | Blank screen on browser launch | Browser cache holding outdated scripts. | Press `Ctrl + F5` (Windows) or `Cmd + Shift + R` (macOS) to hard-refresh the page. |
 
@@ -247,7 +254,7 @@ The application utilizes a **Modern Full-Stack Single Page Application (SPA) Arc
 * **Pure Functional Scoring Engine**: The core scoring mathematics (`src/engine/scoring.ts`) are 100% pure functions with zero DOM or network dependencies.
 * **Dual-Tier Resilient Persistence**:
   1. *Primary*: Cloud Firestore with fine-grained security rules.
-  2. *Secondary Fallback*: Deterministic local cache keyed by lecturer identity (`projecthealth_{sanitized_email}_groups`) ensuring offline capability and test stability.
+  2. *Secondary Fallback*: Local cache keyed by lecturer identity (`projecthealth_{sanitized_email}_groups`, with the alerts under `projecthealth_{sanitized_email}_alerts`) ensuring offline capability and test stability. The cache is unencrypted (see Known Limitations in Section 8).
 * **Optimistic UI Updates**: State mutations reflect immediately in the interface while asynchronous cloud operations resolve in the background.
 
 ---
@@ -263,7 +270,7 @@ The application utilizes a **Modern Full-Stack Single Page Application (SPA) Arc
 | **Authentication** | Firebase Auth | `^12.19.0` | Industry-standard identity and token lifecycle management |
 | **Database** | Cloud Firestore | `^12.19.0` | Real-time NoSQL document store with declarative rule security |
 | **Icons & Visuals** | Lucide React | `^0.546.0` | Accessible and consistent iconography |
-| **Execution Runtime** | tsx / Node.js | `^4.21.0` | Headless execution for automated test suites and validation |
+| **Test Runner** | Vitest on Node.js | `^5.0.3` | Headless unit tests for scoring, parsing and service logic (`npm test`) |
 
 ---
 
@@ -277,26 +284,27 @@ Extracts valid Asana GIDs from arbitrary strings, full browser URLs, or internal
 export function extractAsanaProjectId(input: string): string {
   if (!input) return '';
   let trimmed = input.trim();
+  if (!trimmed) return '';
 
   // Strip leading grp- prefix if present
   if (trimmed.startsWith('grp-')) {
     trimmed = trimmed.substring(4);
   }
 
-  // If pure numeric digits
+  // If pure digits
   if (/^\d+$/.test(trimmed)) {
     return trimmed;
   }
 
-  // If Asana URL matching /0/{projectId}
-  const urlMatch = trimmed.match(/app\.asana\.com\/\d+\/(?:portfolio\/)?(\d+)/);
-  if (urlMatch && urlMatch[1]) {
-    return urlMatch[1];
-  }
+  // Newer address form first: https://app.asana.com/1/{workspaceId}/project/{projectId}/...
+  const newerMatch = trimmed.match(/asana\.com\/1\/\d+\/project\/(\d+)/i);
+  if (newerMatch && newerMatch[1]) return newerMatch[1];
 
-  // Fallback: match any continuous 10+ digits sequence
-  const genericMatch = trimmed.match(/(\d{10,})/);
-  return genericMatch ? genericMatch[1] : trimmed;
+  // Generic /project/{projectId}, older /0/{projectId}/..., portfolio URLs and any
+  // asana.com URL with a 6+ digit id are handled the same way (omitted here).
+
+  // If no valid ID can be extracted, return an empty string (no hard-coded default project)
+  return '';
 }
 ```
 * **Parameters**: `input` (`string`) — User input (e.g., URL, ID, or prefixed identifier).
@@ -304,15 +312,26 @@ export function extractAsanaProjectId(input: string): string {
 
 ---
 
-#### Key Function: `syncStudentGroupFromAsana(group: StudentGroup, accessToken?: string): Promise<StudentGroup>`
-Synchronizes live project tasks and team members, excludes lecturer advisory notices from all scoring inputs, marks departing collaborators as "Left project", and computes authentic workload distribution shares using largest-remainder rounding totaling exactly $100\%$.
+#### Key Function: `syncStudentGroupFromAsana(group, accessToken?, fallbackLeadName?, options?): Promise<StudentGroup>`
+Refreshes one team. With a token it reads the live project from Asana, excludes lecturer advisory notices from all scoring inputs, marks collaborators who have left the project as "Left project" (excluded from scoring) and computes authentic workload shares with the largest-remainder method, totalling exactly $100\%$. Without a token it only regenerates the data of a **simulated** team. A **live** team is never replaced with sample data: without a token the function throws `Paste your Asana token to sync this project.` (abridged excerpt):
 ```typescript
 export async function syncStudentGroupFromAsana(
   group: StudentGroup,
   accessToken?: string,
-  fallbackLeadName?: string
+  fallbackLeadName?: string,
+  options?: { lecturerName?: string; lecturerAsanaGid?: string }
 ): Promise<StudentGroup> {
-  const projectId = extractAsanaProjectId(group.id) || extractAsanaProjectId(group.repoUrl);
+  const cleanToken = accessToken?.trim();
+
+  // Live data must NEVER be replaced by sample data if the token is missing
+  if (group.dataSource === 'live' && !cleanToken) {
+    throw new AsanaApiError(401, 'Paste your Asana token to sync this project.');
+  }
+
+  const projectId =
+    extractAsanaProjectId(group.asanaWorkspace || '') ||
+    extractAsanaProjectId(group.id) ||
+    extractAsanaProjectId(group.repoUrl);
   if (!projectId) {
     throw new AsanaApiError(400, 'Could not find an Asana project ID in that input');
   }
@@ -320,54 +339,23 @@ export async function syncStudentGroupFromAsana(
   let fetched: FetchedAsanaData;
   let isLive = false;
 
-  if (accessToken?.trim()) {
-    // Live fetch: throws error on failure (no silent fallback to simulated data)
-    const { project, tasks } = await fetchLiveAsanaProject(projectId, accessToken.trim());
+  if (cleanToken) {
+    // Live fetch: a failed fetch throws AsanaApiError (no catch that swaps in generated data)
+    const { project, tasks } = await fetchLiveAsanaProject(projectId, cleanToken);
     isLive = true;
     const advisoryGids = (group.messages || []).map((m) => m.taskGid).filter(Boolean) as string[];
-    fetched = processRealAsanaData(project, tasks, {
-      customTeamName: group.name,
-      customCourseCode: group.courseCode,
-      fallbackLeadName: fallbackLeadName || group.teamLeader,
-      advisoryTaskGids: advisoryGids,
-    });
+    fetched = processRealAsanaData(project, tasks, { /* team name, course, lead, advisoryGids, lecturer */ });
   } else {
-    // Explicit simulated mode when no token is supplied
-    fetched = generateStudentProjectFromId(projectId, {
-      customTeamName: group.name,
-      customCourseCode: group.courseCode,
-      fallbackLeadName: fallbackLeadName || group.teamLeader,
-    });
-    isLive = false;
+    // Simulated teams only: explicitly generated data
+    fetched = generateStudentProjectFromId(projectId, { /* team name, course, lead */ });
   }
 
-  // Deduplicate and combine members
-  const memberMap = new Map<string, TeamMember>();
-  for (const m of fetched.members) memberMap.set(m.name.toLowerCase(), m);
-  for (const existing of group.members) {
-    const key = existing.name.toLowerCase();
-    if (!memberMap.has(key)) memberMap.set(key, existing);
-  }
-
-  const combined = Array.from(memberMap.values());
-  const memberCount = combined.length || 1;
-  const equalShare = Math.floor(100 / memberCount);
-  const remainder = 100 - equalShare * memberCount;
-
-  // Strict 100% workload normalization
-  const updatedMembers = combined.map((m, idx) => ({
-    ...m,
-    workloadSharePercent: equalShare + (idx < remainder ? 1 : 0),
-  }));
-
-  return {
-    ...buildStudentGroupFromAsana(fetched, group.name, group.courseCode),
-    id: group.id,
-    members: updatedMembers,
-    lastActivity: 'Just now (Synced from Asana)',
-  };
+  // Live sync only: members no longer in Asana are kept with status 'Left project' and a 0% share
+  // ... build the updated group with buildStudentGroupFromAsana(...) and return it with
+  //     dataSource: isLive ? 'live' : 'simulated'
 }
 ```
+In the current screens the Sync buttons call this function without a token, so they refresh simulated teams only (see Known Limitations in Section 8).
 
 ---
 
@@ -405,42 +393,37 @@ export function computeHealthScore(metrics: ScoringMetrics): number {
 ### Module 3: Team Communication & Dispatch (`src/services/asanaService.ts` & `firestoreProjects.ts`)
 
 #### Key Function: `postMessageToAsanaProject(...)`
-Dispatches advisory notices directly to the student team's Asana board:
+Posts an advisory notice to the student team's Asana board. With no token, nothing is posted and the result says so (`success: false`, `simulated: true`, "Recorded only. Nothing was posted to Asana."); success is returned only when Asana accepts the task and returns its id (abridged excerpt):
 ```typescript
 export async function postMessageToAsanaProject(
   projectIdOrUrl: string,
-  accessToken: string,
-  subject: string,
-  message: string,
-  recipientName?: string
-): Promise<{ success: boolean; taskGid?: string; message: string }> {
+  accessToken?: string,
+  subject: string = '',
+  message: string = '',
+  recipientName?: string,
+  memberUserGids?: string[]
+): Promise<PostMessageResult> {
   const projectId = extractAsanaProjectId(projectIdOrUrl);
-  if (!accessToken?.trim()) {
-    return {
-      success: true,
-      taskGid: `mock-asana-${projectId}-${Date.now()}`,
-      message: `Message logged and queued for Asana project #${projectId}.`,
-    };
+  const cleanToken = accessToken?.trim();
+
+  // No token: no fake success and no mock task id
+  if (!cleanToken || !projectId) {
+    return { success: false, simulated: true, message: 'Recorded only. Nothing was posted to Asana.' };
   }
 
-  const res = await fetch(`https://app.asana.com/api/1.0/tasks`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken.trim()}`,
-      'Content-Type': 'application/json',
+  // Task created WITHOUT a due date, name prefixed "[ProjectHealth AI] Lecturer advisory:"
+  const bodyData: any = {
+    data: {
+      projects: [projectId],
+      name: `[ProjectHealth AI] Lecturer advisory: ${subject}`,
+      notes: `${message}\n\n---\nTarget Recipient: ${recipientName || 'Entire Team'}\nDispatched via ProjectHealth AI\nTimestamp: ${new Date().toLocaleString()}`,
     },
-    body: JSON.stringify({
-      data: {
-        projects: [projectId],
-        name: `📢 Lecturer Advisory: ${subject}`,
-        notes: `${message}\n\nRecipient: ${recipientName || 'Entire Team'}\nVia ProjectHealth AI`,
-        due_on: new Date().toISOString().split('T')[0],
-      },
-    }),
-  });
+  };
+  // followers: only real numeric Asana user ids are added, so those students are notified
 
-  const json = await res.json();
-  return { success: true, taskGid: json.data?.gid, message: 'Posted to Asana.' };
+  // POST /api/asana/tasks, then https://app.asana.com/api/1.0/tasks
+  // res.ok and a returned task gid => { success: true, taskGid, message, membersNotified }
+  // otherwise => { success: false, message: <Asana error text> }
 }
 ```
 
@@ -452,7 +435,7 @@ export async function postMessageToAsanaProject(
 1. **Separation of Concerns (SoC)**: Business logic and mathematics (`scoring.ts`) are completely detached from UI components (`GroupDetailsView.tsx`).
 2. **Immutability & Pure Functions**: Domain state is updated through immutable copies using object spread syntax, preventing accidental side effects.
 3. **Multi-Tenant Scoping Pattern**: All database reads and writes are automatically partitioned by the authenticated user's ID (`lecturerId`), ensuring complete data privacy.
-4. **Graceful Degradation / Circuit Breaker**: If external APIs (such as Asana or Firebase) encounter rate limits or network dropouts, deterministic fallback algorithms ensure zero disruption to user workflows.
+4. **Graceful Degradation Without Hidden Fallbacks**: If Firestore is unreachable, the app falls back to the browser's local copy of the lecturer's data. If Asana rejects a live request (bad token, project not found, rate limit), the app shows a clear error and keeps the last good data: it never silently swaps in sample data. Sample data appears only in the clearly labelled *Simulated* mode.
 
 ---
 
@@ -464,31 +447,27 @@ Cloud Firestore rules enforce that lecturers can only access documents matching 
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isSignedIn() {
-      return request.auth != null;
+    function signedIn() { return request.auth != null; }
+    function ownsDoc() { return signedIn() && resource.data.lecturerId == request.auth.uid; }
+    function createsOwn() { return signedIn() && request.resource.data.lecturerId == request.auth.uid; }
+    function lecturerUnchanged() { return request.resource.data.lecturerId == resource.data.lecturerId; }
+    function ownsParent(groupId) {
+      return signedIn() && get(/databases/$(database)/documents/groups/$(groupId)).data.lecturerId == request.auth.uid;
     }
-    function isLecturerOwner() {
-      return isSignedIn() && resource.data.lecturerId == request.auth.uid;
-    }
-    function isCreatingWithLecturerId() {
-      return isSignedIn() && request.resource.data.lecturerId == request.auth.uid;
-    }
-
     match /users/{uid} {
-      allow read, write: if isSignedIn() && request.auth.uid == uid;
+      allow read, write: if signedIn() && request.auth.uid == uid;
     }
-
     match /groups/{groupId} {
-      allow read, delete: if isLecturerOwner();
-      allow create: if isCreatingWithLecturerId();
-      allow update: if isLecturerOwner();
-
-      match /messages/{id} {
-        allow read, write: if isSignedIn();
-      }
-      match /history/{id} {
-        allow read, write: if isSignedIn();
-      }
+      allow read, delete: if ownsDoc();
+      allow create: if createsOwn();
+      allow update: if ownsDoc() && lecturerUnchanged();
+      match /messages/{id} { allow read, write: if ownsParent(groupId); }
+      match /history/{id} { allow read, write: if ownsParent(groupId); }
+    }
+    match /alerts/{alertId} {
+      allow read, delete: if ownsDoc();
+      allow create: if createsOwn();
+      allow update: if ownsDoc() && lecturerUnchanged();
     }
   }
 }
@@ -505,62 +484,50 @@ Output files are generated into the `/dist` directory, ready for deployment to F
 
 ## 7. Testing & Validation Methodologies
 
-The codebase includes automated test suites covering all functional and non-functional requirements.
+The codebase includes 69 automated tests, written with Vitest, covering the functional and non-functional requirements (FR-1 to NFR-3) and the defects found in review (Review 1 to Review 7). The tests run headless in Node.js with no browser, no Firebase project and no Asana token: calls to Asana are replaced with mocked responses.
 
 ### Test Execution Command
-Tests are executed using headless TypeScript execution:
 ```bash
-npx tsx test_requirements.ts
+npm install
+npm test
 ```
 
-### Validation Matrix & Test Results
+### Test Results
+The tests live in `tests/requirements.test.ts` and are configured in `vitest.config.ts`. Each line below is one group of tests with its number of tests in brackets (`npm test` prints every individual test as well).
 ```
-========================================================================
-ProjectHealth AI — Complete Functional & Non-Functional Verification
-========================================================================
+> react-example@0.0.0 test
+> vitest run --reporter=tree
 
-=== PART 1: ORIGINAL REQUIREMENT CHECKS (FR-1 to NFR-3) ===
-[FR-1] Auth & Multi-Tenant Isolation: Owner lecturer granted access; foreign lecturer denied
-[FR-2] Asana Ingestion & URL Parsing: Raw IDs, grp- prefixes, and URLs parsed accurately
-[FR-3] Multi-Factor Scoring: computeHealthScore(25, 44, 61, 44.4, 0) returns 37; 65/100 verified
-[FR-4] Risk Classification: Boundary tiers (<40 High, 40-69 Medium, >=70 Low) verified
-[FR-5] Member Sync & Workload Equity: Shares total exactly 100% via largest-remainder rounding
-[FR-6] Communication Audit & Score Invariance: Lecturer messages audited without altering score
-[NFR-1] Performance & Low Latency: 500 calculations completed in ~1ms (<0.2ms/calc)
-[NFR-2] Resilience & Edge-Case Stability: Handles empty groups and zero-task states safely
-[NFR-3] Data Integrity: Strict TypeScript model and Firestore schema enforcement
+ RUN  v5.0.3 /path/to/project-health-ai
 
-=== PART 2: THE FIVE NEW REQUIREMENT SUITES ===
---- Suite 1: Asana URL and ID Parsing (Item 5) ---
-  ✓ New-format URL (asana.com/1/{workspaceId}/project/{projectId}/...) returns project ID
-  ✓ New-format URL with board tab returns project ID
-  ✓ Older-format URL (asana.com/0/{projectId}/...) returns project ID
-  ✓ Plain digits, grp- prefixes, and portfolio URLs return project ID
-  ✓ Empty/invalid inputs return empty string with descriptive error
+ ✓ tests/requirements.test.ts (69 tests) 84ms
+   ✓ FR-1 Authentication and tenant isolation (rules file) (2)
+   ✓ FR-2 Asana ingestion and URL parsing (3)
+   ✓ FR-3 Multi-factor scoring (weights 30/25/20/15/10) (2)
+   ✓ FR-4 Risk classification (70 and 40 thresholds) (3)
+   ✓ FR-5 Member sync and workload equity (shares total 100) (2)
+   ✓ FR-6 Communication audit and invariance (mocked Asana) (2)
+   ✓ NFR-1 Performance and low latency (1)
+   ✓ NFR-2 Resilience and edge-case stability (3)
+   ✓ NFR-3 Data integrity (simulated sync, no network) (2)
+   ✓ Review 1 Asana URL and ID parsing (9)
+   ✓ Review 2 Real workload shares and equity calculation (15)
+     ✓ lopsided team (8, 1, 1 completed tasks) (3)
+     ✓ one-member team (2)
+     ✓ no completed tasks, assigned tasks 3 and 1 (3)
+     ✓ no completed and no assigned tasks (three students) (3)
+     ✓ ties (4)
+   ✓ Review 3 Advisory task exclusion from scoring (6)
+   ✓ Review 4 No silent fallback to simulated data (4)
+   ✓ Review 5 Risk-band boundaries (6)
+   ✓ Review 6 One shared overdue formula: max(0, 100 - 20N - 2D) (6)
+     ✓ advisory and lecturer tasks are ignored (3)
+   ✓ Review 7 Live-data protection (3)
 
---- Suite 2: Real Workload Shares & Equity Calculation (Item 4) ---
-  ✓ Lopsided team shares sum to 100 while preserving raw contribution [80, 10, 10]
-  ✓ n=1 member receives exactly 100% share and equity factor of 100
-  ✓ Zero completed tasks falls back to assigned tasks; zero tasks splits equally with equity 50
-  ✓ Largest-remainder method resolves integer rounding ties
-
---- Suite 3: Advisory Task Exclusions from Scoring (Item 3b) ---
-  ✓ Tasks prefixed "[ProjectHealth AI] Lecturer advisory:" excluded from metrics
-  ✓ Tasks matching advisory task GIDs excluded from completion and overdue counts
-  ✓ Tasks authored by lecturer excluded from student scoring metrics
-  ✓ Student workload shares calculated from authentic student contributions
-
---- Suite 4: No Silent Fallback to Simulated Data (Item 6) ---
-  ✓ Failed live Asana fetches throw descriptive errors ("Asana token rejected", etc.)
-  ✓ Never silently swaps in simulated data when live sync fails
-  ✓ Existing group data preserved on failure
-
---- Suite 5: Risk Classification Boundary Conditions (Item 8) ---
-  ✓ Boundary scores 0, 39, 40, 69, 70, 100 classified accurately
-
-========================================================================
-Results: 60 Passed, 0 Failed
-========================================================================
+ Test Files  1 passed (1)
+      Tests  69 passed (69)
+   Start at  21:28:00
+   Duration  419ms (transform 60%, tests 30%, import 9%, worker 1%)
 ```
 
 ---
@@ -569,14 +536,23 @@ Results: 60 Passed, 0 Failed
 
 | Area / Feature | Requirement & Challenge | Implemented Architectural Solution |
 | :--- | :--- | :--- |
-| **1. Firestore Security Rules** | Strict multi-tenant isolation; prevent unauthorized read/write access to student data. | Deployed owner-only rules enforcing `lecturerId == request.auth.uid` across `/users/{uid}`, `/groups/{groupId}` (including `/messages` and `/history` subcollections), and `/alerts/{alertId}`. |
+| **1. Firestore Security Rules** | Strict multi-tenant isolation; prevent unauthorized read/write access to student data. | Deployed owner-only rules enforcing `lecturerId == request.auth.uid` across `/users/{uid}`, `/groups/{groupId}` (including `/messages` and `/history` subcollections, which check the parent group's owner), and `/alerts/{alertId}` (the rules allow alert documents, but the current app keeps alerts in the browser only). |
 | **2. Password Recovery** | Insecure OTP codes and exposed static passcodes. | Removed all OTP screens, static codes, and on-screen code displays. Implemented standard email password reset via `sendPasswordResetEmail` with a generic confirmation message and maintained 15-minute lockout on 5 failed attempts. |
 | **3. Advisory Message Isolation** | Lecturer intervention messages artificially inflated team communication and overdue metrics. | Created Asana tasks without due dates with prefix `[ProjectHealth AI] Lecturer advisory:`, saved task GIDs on message audit records, and excluded all advisory/lecturer tasks from scoring while freezing communication score changes on sent messages. |
 | **4. Authentic Workload Distribution** | Artificial equal-split normalization hid student contribution discrepancies. | Replaced equal-split with raw contribution shares based on completed tasks (fallback to assigned), applying the largest-remainder rounding method to sum to 100%, and computing equity factor from the maximum share fraction. |
 | **5. Asana URL & ID Parsing** | Support modern workspace URLs and avoid fallback to static IDs. | Added regex matching for `app.asana.com/1/{workspaceId}/project/{projectId}/...` before legacy forms; removed all hardcoded project ID fallbacks, returning descriptive errors if no ID is found. |
 | **6. Truth in Telemetry & No Silent Fallbacks** | Failed Asana API calls silently reverted to simulated data. | Removed silent catch fallback. Failed fetches return structured error messages ("Asana token rejected", "Project not found", rate limit), keep existing group data intact, and display prominent "Simulated" / "Synced from Asana" badges. |
 | **7. Interim Token Security** | In-browser tokens risking accidental persistence or leak. | Configured Asana token field as password type with prototype warning notice. Maintained token strictly in ephemeral memory, never saving to Firestore, `localStorage`, logs, or URLs, and clearing on sign-out. |
-| **8. Automated Regression Suites** | Ensuring strict compliance across all scoring, parsing, and resilience requirements. | Built comprehensive test suite in `test_requirements.ts` validating all 9 core functional/non-functional requirements plus the 5 new verification suites (60/60 passing). |
+| **8. Automated Regression Suites** | Ensuring strict compliance across all scoring, parsing, and resilience requirements. | Built a Vitest suite in `tests/requirements.test.ts` (run with `npm test`) covering the 9 original requirement groups plus 7 review groups (69/69 passing). |
+
+### Known Limitations of This Prototype
+The Technical Implementation Document lists all 16 limitations that were logged (7 fixed, 2 mitigated, 7 open). The ones to know before running or demonstrating the app:
+
+* **Asana token.** It is typed into the browser and kept in memory only, so use a throwaway token. No Sync button can send it, so a team added with a token cannot be refreshed from a Sync button; add it again with the token instead.
+* **Simulated teams.** They are generated from the project ID. Their due dates are fixed when added, so their scores drift down day by day. A token typed together with a sample team or **Pull Data** does not make the app read Asana, although the saved team is then marked live; use **Live Asana REST API** for a real project. The token box keeps its text until you sign out or reload the page, so clear it before adding a demo team.
+* **Local cache.** The browser keeps group data, alerts and a plain-text copy of the password typed at sign-up (used to sign in when Firebase cannot be reached). Sign-out does not clear it. This must be removed before real use.
+* **Alerts.** They are saved in the browser only, and the in-app alert tick box in Settings is not connected to anything yet.
+* **Unused files.** 14 source files are no longer imported by the running app (`components/ActionModals`, `DemoPanel`, `GaugeChart`, `Layout`, `RawAssessmentModal`, `RiskBadge`, `Sparkline`; `data/seedData.ts`; `hooks/useAlerts`, `useAuth`, `useToast`; `pages/LoginPage.tsx`; `services/api.ts`, `services/assessmentRunner.ts`). They can be deleted.
 
 ---
 
